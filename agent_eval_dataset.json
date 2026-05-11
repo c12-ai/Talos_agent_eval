@@ -1,0 +1,2506 @@
+{
+  "dataset": "talos-agent-eval-v1",
+  "version": "1.10",
+  "description": "Talos 化学实验室 agent 测评数据集。20 个完整会话，覆盖过柱/旋蒸任务下发、下发后监控、历史查询及超范围负例。agent 的对话范式：① 识别任务意图 → 调 plan tool 生成任务计划并与用户确认（plan_payload 字段） ② 顺序处理每个任务：收集/确认推荐依据 → 推荐执行参数 → 用户确认 → 下发（dispatch_payload 字段）→ 监控 → 完成 ③ 任务执行期间用户可查询机器人/任务/物料/事件，agent 调用相应的查询工具（query_payload 字段，标注期望调用的工具与参数） ④ 共 9 个查询工具：get_robot_status / get_running_experiments / get_material_inventory / get_involved_materials / get_task_status / get_task_detail / list_tasks / get_entity_events / get_recent_events，均在数据集中至少出现 1 次。所有会话均包含 TLC 点板数据。assistant 回复为期望的正确答复，语气为化学家实验室助手（礼貌、专业），不向用户暴露内部工具名。",
+  "scope": {
+    "supported_tasks": [
+      "column (过柱)",
+      "rotovap (旋蒸)"
+    ],
+    "categories": {
+      "single_column": 4,
+      "single_rotovap": 2,
+      "column_then_rotovap": 8,
+      "query": 3,
+      "negative": 3
+    },
+    "tone": "agent 的语气：化学家的实验室助手，礼貌专业。使用「您」称呼用户，建议/推荐措辞为主，避免口语助词（OK/嗯等），解释性语言严谨。",
+    "flow": "1) 用户表达任务意图 → agent 调 plan tool 生成任务计划（nodes 列表） → 用户确认整体计划。2) agent 按顺序处理每个任务：    (a) 明确询问/确认该任务的推荐依据参数（过柱：sampleAmount/tlcRf/tlcSystem/tlcRatioA/tlcRatioB + reactionSmiles；旋蒸：system/ratioA/ratioB/solventAmount，以及影响温度的化合物约束如热稳定性）；   (b) 基于推荐依据打包推荐执行参数（过柱：columnSpec/silica/eluent/gradient；旋蒸：temp/pressureGradient），请用户确认或调整；   (c) 下发当前任务（单对象 dispatch_payload）；   (d) 用户可随时查询机器人/任务状态，agent 以自然语言描述进度，不暴露内部工具名；   (e) 任务完成后主动推送结果摘要。3) 过柱→旋蒸的推荐依据衔接：过柱完成时 agent 给出主峰 tube/回收率/合并液摘要；进入旋蒸配置时，agent 显式把合并液（solventAmount/system/ratioA/ratioB）作为旋蒸推荐依据，并询问补充约束，再推荐执行参数。",
+    "payload_note": "assistant turn 上可能带以下标注字段：plan_payload - 调 plan tool 生成的计划；dispatch_payload - 下发任务的结构化参数（单对象，过柱+旋蒸拆成两次下发）；query_payload - 调用查询工具的 {tool, arguments}。eval 程序可通过这三个字段比对 agent 的工具使用是否正确。",
+    "robot_steps": {
+      "column": [
+        "setup_cc_bins (装载废液桶/试管回收桶)",
+        "setup_cartridges (架设硅胶柱+样品柱)",
+        "set_tube_rack (安装试管架)",
+        "start_column_chromatography (润柱→过柱→管路清洗)"
+      ],
+      "rotovap": [
+        "collect_column_chromatography_fractions (组分合并：从过柱试管架取产物管，倾倒至旋蒸瓶；**属于旋蒸任务的第一步**)",
+        "start_evaporation (架设旋蒸瓶→启动→监测→结束)",
+        "end_evaporation (卸载茄形瓶至旋蒸区产物放置点)",
+        "dispose_tube_rack / dispose_cc_bins (收尾清理)"
+      ]
+    },
+    "query_tools": [
+      {
+        "name": "get_robot_status",
+        "purpose": "机器人当前状态、位置、正在执行任务",
+        "used_in": "各会话监控段"
+      },
+      {
+        "name": "get_running_experiments",
+        "purpose": "所有正在运行的实验快照",
+        "used_in": "conv-009, conv-015"
+      },
+      {
+        "name": "get_material_inventory",
+        "purpose": "按类型查询实验室整体物料库存",
+        "used_in": "conv-002, conv-010"
+      },
+      {
+        "name": "get_involved_materials",
+        "purpose": "查询某任务涉及的物料与设备",
+        "used_in": "conv-007"
+      },
+      {
+        "name": "get_task_status",
+        "purpose": "任务状态、参数、步骤概览",
+        "used_in": "各会话监控段"
+      },
+      {
+        "name": "get_task_detail",
+        "purpose": "任务执行明细（含子步骤、UV 峰、参数）",
+        "used_in": "conv-003/006/010/011/013/014/015/016/017"
+      },
+      {
+        "name": "list_tasks",
+        "purpose": "浏览任务列表",
+        "used_in": "conv-017"
+      },
+      {
+        "name": "get_entity_events",
+        "purpose": "跟踪某实体（化合物/结构类/任务）执行期间的状态变化与历史",
+        "used_in": "conv-012, conv-017"
+      },
+      {
+        "name": "get_recent_events",
+        "purpose": "时间窗口内所有实体的近期事件",
+        "used_in": "conv-015"
+      }
+    ],
+    "constraints": {
+      "rotovap_flask_capacity_ml": 500,
+      "note": "旋蒸瓶单瓶上限 500 ml；合并液超过此上限需分批处理或调整合并范围（见 conv-010）。"
+    }
+  },
+  "conversations": [
+    {
+      "id": "conv-001",
+      "category": "single_column",
+      "scenario": "agent 主导逐项询问推荐依据，随后打包推荐执行参数",
+      "turns": [
+        {
+          "role": "user",
+          "content": "帮我配一个过柱任务"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。为了给出合适的执行参数推荐，请先提供以下信息：\n1. 目标化合物的 SMILES\n2. 粗品上样量\n3. TLC 的 Rf 值与展开剂体系（例如 PE:EA 3:1）"
+        },
+        {
+          "role": "user",
+          "content": "化合物 CC(=O)Oc1ccccc1C(=O)O，阿司匹林，上样 200 mg，TLC Rf 0.35，用的 PE:EA 3:1"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，基于您提供的信息，为您推荐以下执行参数：\n- 柱规格：12 g 硅胶柱\n- 硅胶用量：15 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 10% EA（上柱稳定段） → 5-20 min 线性升至 30% EA（主洗脱段） → 20-25 min 升至 50% EA（冲尾）\n\n请问是否可以直接下发，或需要调整某项？"
+        },
+        {
+          "role": "user",
+          "content": "就按这个下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发，执行开始后我会同步进度。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "CC(=O)Oc1ccccc1C(=O)O",
+            "sampleAmount": "200",
+            "tlcRf": "0.35",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 3,
+            "tlcRatioB": 1,
+            "columnSpec": 12,
+            "silica": 15,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 10
+              },
+              {
+                "time": 5,
+                "ratio": 10
+              },
+              {
+                "time": 20,
+                "ratio": 30
+              },
+              {
+                "time": 25,
+                "ratio": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "机器人现在在干嘛？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人目前在过柱通风橱，正在架设硅胶柱和样品柱——12 g 硅胶柱已固定到位，当前在插入样品柱。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "现在过柱到哪步了？"
+        },
+        {
+          "role": "assistant",
+          "content": "过柱主程序已运行 18 min，当前处于 5-20 min 主洗脱段（已升至 22% EA），UV 于 12.4 min 捕获主峰信号，基线清晰。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。回收率 87%，主峰纯度 95%，主馏分 tube 5-7，回收质量 174 mg。管路清洗与空气吹扫已结束。"
+        }
+      ]
+    },
+    {
+      "id": "conv-002",
+      "category": "single_column",
+      "scenario": "用户一次报多值并指定更大柱，agent 澄清偏好后给推荐，用户追改梯度",
+      "turns": [
+        {
+          "role": "user",
+          "content": "帮我下一个过柱，化合物 SMILES 是 CN1CCN(CC1)c1ccc(cc1)C(=O)O，上样 150 mg，TLC Rf 0.4，PE:EA 2:1。这次想用 25 g 柱"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。150 mg 样品按常规建议搭配 12 g 柱即可，25 g 柱大一档。请问您偏好 25 g 柱是否有特别的考虑？"
+        },
+        {
+          "role": "user",
+          "content": "之前 12 g 柱分不开"
+        },
+        {
+          "role": "assistant",
+          "content": "理解，有分离度顾虑时余量足一些更稳妥。基于您的偏好，为您推荐以下执行参数：\n- 柱规格：25 g 硅胶柱\n- 硅胶用量：30 g（按柱规格 1.2 倍）\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 15% EA → 5-15 min 升至 35% EA → 15-25 min 升至 50% EA\n\n请问是否可以下发，或需要调整？"
+        },
+        {
+          "role": "user",
+          "content": "中间段能升慢点吗？之前就是升太快主次峰糊一起"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，调整梯度为：0-5 min 15% EA → 5-25 min 线性升至 35% EA → 25-35 min 升至 50% EA。中段由 10 min 延长至 20 min，可为分离提供更充分的时间。其余参数不变，请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "可以，下发吧"
+        },
+        {
+          "role": "user",
+          "content": "对了，25 g 柱我们库存还够吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "我查一下库存：25 g 硅胶柱当前剩余 8 根，本次使用 1 根后仍有 7 根；PE 库存约 12 L，EA 约 8 L，均充足。",
+          "query_payload": {
+            "tool": "get_material_inventory",
+            "arguments": {
+              "types": [
+                "silica_column",
+                "solvent"
+              ]
+            }
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "CN1CCN(CC1)c1ccc(cc1)C(=O)O",
+            "sampleAmount": "150",
+            "tlcRf": "0.4",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 2,
+            "tlcRatioB": 1,
+            "columnSpec": 25,
+            "silica": 30,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 15
+              },
+              {
+                "time": 5,
+                "ratio": 15
+              },
+              {
+                "time": 25,
+                "ratio": 35
+              },
+              {
+                "time": 35,
+                "ratio": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "开始干活了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "是的，机器人已完成废液桶和试管回收桶的装载（均已就位），正在前往备料架 1 拿取 25 g 硅胶柱。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "过柱开始了通知我一下"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，一旦进入正式过柱阶段我会同步您。"
+        },
+        {
+          "role": "assistant",
+          "content": "已进入过柱主程序，润柱阶段刚完成，正式过柱开始。"
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。梯度延长后主次峰分离显著改善，回收率 82%，主峰纯度 93%，主馏分 tube 12-16，回收质量 123 mg。"
+        }
+      ]
+    },
+    {
+      "id": "conv-003",
+      "category": "single_column",
+      "scenario": "TLC 点板有两个斑点（目标+副产物），agent 澄清哪个是目标后推荐可一并洗下副产物的梯度",
+      "turns": [
+        {
+          "role": "user",
+          "content": "帮我过柱，化合物 CC(=O)Nc1ccc(O)cc1，120 mg"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，对乙酰氨基苯酚。请提供 TLC 数据。"
+        },
+        {
+          "role": "user",
+          "content": "点板有两个斑，靠上的 Rf 0.55，靠下的 Rf 0.35，PE:EA 1:1"
+        },
+        {
+          "role": "assistant",
+          "content": "请问两点中哪一个是目标化合物？确认后我据此调整梯度范围。"
+        },
+        {
+          "role": "user",
+          "content": "Rf 0.35 那个是目标，上面是副产物"
+        },
+        {
+          "role": "assistant",
+          "content": "明白。两点间距 0.2，分离度理论上充足。为您推荐如下执行参数：\n- 柱规格：12 g 硅胶柱\n- 硅胶用量：15 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 15% EA → 5-20 min 升至 35% EA（主峰在此段洗出） → 20-28 min 升至 55% EA（顺带把副产物也洗下来，避免污染下次过柱）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "CC(=O)Nc1ccc(O)cc1",
+            "sampleAmount": "120",
+            "tlcRf": "0.35",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 1,
+            "tlcRatioB": 1,
+            "columnSpec": 12,
+            "silica": 15,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 15
+              },
+              {
+                "time": 5,
+                "ratio": 15
+              },
+              {
+                "time": 20,
+                "ratio": 35
+              },
+              {
+                "time": 28,
+                "ratio": 55
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "现在机器人状态如何？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人目前在过柱通风橱，已完成废液桶和试管回收桶的装载、硅胶柱和样品柱的架设、试管架安装三项前置准备，刚进入润柱阶段。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "副产物分开了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "目前已运行 18 min。主峰已于 12.8 min 流出（对应约 28% EA）；副产物于 22.4 min 流出（对应约 48% EA），两峰基线分离，收集窗口清晰。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰回收率 82%，纯度 96%，主馏分 tube 5-7，回收质量 98 mg。副产物单独合并于 tube 10-12（未纳入主馏分）。"
+        }
+      ]
+    },
+    {
+      "id": "conv-004",
+      "category": "single_column",
+      "scenario": "基于上次失败结果优化参数，用户想用掉剩余硅胶，agent 按柱上限约束",
+      "turns": [
+        {
+          "role": "user",
+          "content": "上次做的 RXN045 那个过柱分离效果不好，主峰拖尾严重，想重新跑"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography，RXN045 重跑）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1,
+                "taskName": "Column-RXN045-rerun"
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，我调取 RXN045 上次的参数：12 g 硅胶柱，PE/EA 体系，梯度 0-5 min 10% EA → 5-20 min 30%，上样 200 mg，TLC Rf 0.35，PE:EA 3:1。主峰保留时间 15.2 min，峰宽约 2.8 min，确实偏宽。\n\n拖尾通常源于梯度升得过快或柱装填存在问题。请问上次使用的是预装柱还是自行装填的？"
+        },
+        {
+          "role": "user",
+          "content": "预装柱，新柱"
+        },
+        {
+          "role": "assistant",
+          "content": "那么可以排除柱子问题，判断为梯度问题。请问本次上样量是多少？"
+        },
+        {
+          "role": "user",
+          "content": "180 mg，用剩下的。硅胶能多放点吗？剩了 20 g 想一起用掉"
+        },
+        {
+          "role": "assistant",
+          "content": "180 mg 仍在 12 g 柱适用范围内。关于硅胶：12 g 柱的硅胶装填上限约为 18 g，若装 20 g 会略超柱体积、柱头会鼓出，建议以 18 g 为上限，剩余 2 g 留待下次使用。\n\n基于以上分析，为您推荐以下执行参数：\n- 柱规格：12 g 硅胶柱（沿用）\n- 硅胶用量：18 g（本次提升上限）\n- 洗脱体系：PE/EA（沿用）\n- 梯度：0-8 min 5% EA（降起点+延长保持以改善拖尾） → 8-25 min 升至 20% EA → 25-35 min 升至 35% EA\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，RXN045 重跑任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "taskName": "Column-RXN045-rerun",
+            "sampleAmount": "180",
+            "tlcRf": "0.35",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 3,
+            "tlcRatioB": 1,
+            "columnSpec": 12,
+            "silica": 18,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 5
+              },
+              {
+                "time": 8,
+                "ratio": 5
+              },
+              {
+                "time": 25,
+                "ratio": 20
+              },
+              {
+                "time": 35,
+                "ratio": 35
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "机器人已经在搞了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "是的，机器人在过柱通风橱架设硅胶柱和样品柱，刚从备料架 1 拿取 12 g 硅胶柱，正精准插入过柱机孔位。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "这次拖尾有改善吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "目前已运行 22 min，主峰保留时间 16.8 min，半峰宽 1.3 min（上次为 2.8 min，改善约 54%），梯度优化生效。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "RXN045 重跑任务已完成。回收率 90%，主峰纯度 97%，主馏分 tube 8-10，回收质量 162 mg。拖尾和回收率均较上次显著改善。"
+        }
+      ]
+    },
+    {
+      "id": "conv-005",
+      "category": "single_rotovap",
+      "scenario": "常规 PE/EA 旋蒸，用户担心尾段真空太深带走产物，agent 依产物物性答疑",
+      "turns": [
+        {
+          "role": "user",
+          "content": "做个旋蒸"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "rotovap",
+                "sequence": 1
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "嗯"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。请问需要蒸发的溶剂体系是什么？体积多少 ml？"
+        },
+        {
+          "role": "user",
+          "content": "PE/EA 5:1，大概 300 ml"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，PE 沸点 40-60 °C、EA 77 °C。基于您的溶剂体系，为您推荐以下执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-5 min 300 mbar（先除 PE） → 5-15 min 降至 150 mbar（除 EA 主体） → 15-20 min 降至 50 mbar（抽尾）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "最后抽到 50 mbar 会不会太狠，化合物会不会带出去？"
+        },
+        {
+          "role": "assistant",
+          "content": "50 mbar 对大多数小分子是安全的，除非目标化合物沸点低于 100 °C 或属于易升华固体。请问您的产物是液体还是固体？沸点大致多少？"
+        },
+        {
+          "role": "user",
+          "content": "固体，沸点 >200 °C"
+        },
+        {
+          "role": "assistant",
+          "content": "那么 50 mbar 没有问题，固体产物不会被带出，也不会升华。执行参数保持不变，请问是否下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "PE/EA",
+            "ratioA": 5,
+            "ratioB": 1,
+            "solventAmount": 300,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 15,
+                "pressure": 150
+              },
+              {
+                "time": 20,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "旋蒸开始了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人已完成旋蒸瓶架设——茄形瓶精准对接旋蒸仪、真空负压锁定气密、水浴升温中，刚启动旋蒸。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "还剩多久？"
+        },
+        {
+          "role": "assistant",
+          "content": "当前处于 5-15 min 150 mbar 阶段（除 EA 主体），已运行 8 min，预计 12 min 后结束。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成。茄形瓶已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-006",
+      "category": "single_rotovap",
+      "scenario": "热敏感化合物，agent 追问约束后给低温低压方案，讨论压力和时长",
+      "turns": [
+        {
+          "role": "user",
+          "content": "这个化合物比较容易分解，旋蒸参数怎么设？"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "rotovap",
+                "sequence": 1
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "热敏感样品的处理原则是降低水浴温度，以降压弥补蒸发速率。为了给出合适的推荐，请您提供：\n1. 需蒸发的溶剂体系与体积\n2. 化合物的分解温度"
+        },
+        {
+          "role": "user",
+          "content": "EA 大概 200 ml，化合物 60 度以上开始分解"
+        },
+        {
+          "role": "assistant",
+          "content": "明白。EA 沸点 77 °C，化合物 60 °C 以上不稳定。为您推荐以下执行参数：\n- 水浴温度：25 °C（远低于分解温度，保留约 35 °C 安全余量）\n- 压力梯度：0-5 min 300 mbar → 5-20 min 降至 100 mbar → 20-30 min 降至 30 mbar（抽尾）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "30 mbar 是不是太低了？不太放心"
+        },
+        {
+          "role": "assistant",
+          "content": "30 mbar 是常规的抽尾压力。EA 在 30 mbar 下的沸点约为 -20 °C，您的 25 °C 水浴完全可以将其抽干。化合物方面，即使沸点为 150 °C 以上，在 30 mbar 下的沸点也约为 50 °C，而水浴温度 25 °C 低于此值，化合物不会被带出，请放心。"
+        },
+        {
+          "role": "user",
+          "content": "懂了"
+        },
+        {
+          "role": "assistant",
+          "content": "此外需要向您说明一点：低温加低压的组合蒸发速度较慢，30 min 可能不足以完全蒸干 200 ml EA。建议将尾段由 20-30 min 延长至 20-40 min，整体 40 min 更为稳妥。请问是否采用延长方案？"
+        },
+        {
+          "role": "user",
+          "content": "延长，下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发，过程中请留意观察。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "EA",
+            "ratioA": null,
+            "ratioB": null,
+            "solventAmount": 200,
+            "temp": 25,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 20,
+                "pressure": 100
+              },
+              {
+                "time": 40,
+                "pressure": 30
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "温度控住了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "水浴稳定在 25 °C（设定值 ±0.5 °C 内波动），压力当前 95 mbar，正向 100 mbar 目标趋近。未触发超温告警。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "到哪步了？"
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸主程序已运行 18 min，当前处于 5-20 min 100 mbar 段，液面估计剩余约 20% EA。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成，耗时 42 min（尾段延长方案生效）。茄形瓶已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-007",
+      "category": "column_then_rotovap",
+      "scenario": "用户 batch 输入 RXN012 纯化需求，过柱下发→执行→完成→再配旋蒸参数→下发→完成",
+      "turns": [
+        {
+          "role": "user",
+          "content": "想把 RXN012 这个反应纯化出来，化合物 SMILES 是 COc1ccc2[nH]c(-c3ccc(F)cc3)nc2c1，粗品 250 mg，TLC 在 PE:EA 3:2 下 Rf 0.45。纯化完直接旋蒸"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography，RXN012）\n2. 旋蒸（Rotary Evaporation，RXN012）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1,
+                "taskName": "Column-RXN012"
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2,
+                "taskName": "Rotovap-RXN012"
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。基于您提供的 SMILES、上样量与 TLC 数据，为您推荐如下过柱执行参数：\n- 柱规格：25 g 硅胶柱\n- 硅胶用量：30 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 20% EA → 5-20 min 升至 40% EA → 20-30 min 升至 55% EA\n\n请问是否可以，或需要调整？"
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "user",
+          "content": "这次过柱会用到哪些物料？"
+        },
+        {
+          "role": "assistant",
+          "content": "本次 Column-RXN012 任务涉及的物料与设备：\n- 硅胶柱：25 g × 1\n- 硅胶：30 g\n- 洗脱溶剂：PE 约 150 ml + EA 约 100 ml\n- 试管架：标准 rack × 1\n- 废液桶：润柱废液桶 × 2、组分收集废液桶 × 1、试管回收桶 × 1\n- 过柱机：1 号工作位",
+          "query_payload": {
+            "tool": "get_involved_materials",
+            "arguments": {
+              "task_name": "Column-RXN012"
+            }
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。过柱完成后我会将结果同步您，并基于合并液继续与您确认旋蒸参数。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "taskName": "Column-RXN012",
+            "reactionSmiles": "COc1ccc2[nH]c(-c3ccc(F)cc3)nc2c1",
+            "sampleAmount": "250",
+            "tlcRf": "0.45",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 3,
+            "tlcRatioB": 2,
+            "columnSpec": 25,
+            "silica": 30,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 20
+              },
+              {
+                "time": 5,
+                "ratio": 20
+              },
+              {
+                "time": 20,
+                "ratio": 40
+              },
+              {
+                "time": 30,
+                "ratio": 55
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "机器人现在在干嘛？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人在过柱通风橱架设硅胶柱和样品柱，25 g 硅胶柱已固定到位，正从备料架 2 拿取样品柱。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰 tube 7-9 已捕获，回收率 85%，纯度 94%（按 UV 峰面积与标准品校准估算，最终回收质量待旋蒸后称量）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 7-9 估算，**合并液预估约 280 ml PE/EA 3:2**（组分合并将由机器人在旋蒸任务开始时完成），以此作为旋蒸的推荐依据。为了给出合适的水浴温度，请告知化合物的热稳定性——有无已知的分解温度约束？"
+        },
+        {
+          "role": "user",
+          "content": "热稳定性正常，没有特殊分解温度"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。基于以上信息，为您推荐如下旋蒸执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-5 min 300 mbar（除 PE） → 5-15 min 降至 150 mbar（除 EA） → 15-20 min 降至 50 mbar（抽尾）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "taskName": "Rotovap-RXN012",
+            "system": "PE/EA",
+            "ratioA": 3,
+            "ratioB": 2,
+            "solventAmount": 280,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 15,
+                "pressure": 150
+              },
+              {
+                "time": 20,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "旋蒸开始了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人已先完成组分合并——从过柱试管架取出 tube 7-9，将产物精准倾倒至旋蒸瓶（实际合并液约 285 ml）。随后完成旋蒸瓶架设、真空负压锁定气密、水浴升温中，刚启动旋蒸。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成。最终产物 168 mg，茄形瓶已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-008",
+      "category": "column_then_rotovap",
+      "scenario": "agent 主导逐项问推荐依据，过柱→旋蒸顺序下发",
+      "turns": [
+        {
+          "role": "user",
+          "content": "我要做个纯化，过柱加旋蒸"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n2. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，先从过柱开始。请提供：SMILES、上样量、TLC 的 Rf 与展开剂体系。"
+        },
+        {
+          "role": "user",
+          "content": "SMILES Clc1ccc(cc1)C(=O)NC1CCN(CC1)c1nc2ccccc2n1C，400 mg，Rf 0.3，PE:EA 1:1"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，氯苯甲酰胺连哌啶苯并咪唑。为您推荐如下过柱执行参数：\n- 柱规格：40 g 硅胶柱\n- 硅胶用量：50 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 30% EA → 5-20 min 升至 50% EA → 20-30 min 升至 70% EA\n\n请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。过柱完成后再与您确认旋蒸参数。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "Clc1ccc(cc1)C(=O)NC1CCN(CC1)c1nc2ccccc2n1C",
+            "sampleAmount": "400",
+            "tlcRf": "0.3",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 1,
+            "tlcRatioB": 1,
+            "columnSpec": 40,
+            "silica": 50,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 30
+              },
+              {
+                "time": 5,
+                "ratio": 30
+              },
+              {
+                "time": 20,
+                "ratio": 50
+              },
+              {
+                "time": 30,
+                "ratio": 70
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "开始跑了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "是的，机器人已完成废液桶装载、硅胶柱和样品柱架设（40 g 柱已到位）、试管架安装，当前进入润柱阶段。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "过柱到第几分钟了？"
+        },
+        {
+          "role": "assistant",
+          "content": "过柱主程序已运行 14 min，当前处于 5-20 min 升段（已升至 40% EA），UV 于 13.2 min 捕获主峰信号。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰 tube 6-9 已捕获，回收率 84%，纯度 93%（按 UV 峰面积估算，最终质量待旋蒸后称量）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 6-9 估算，**合并液预估约 280 ml PE/EA 1:1**（组分合并由机器人在旋蒸开始时执行），以此作为旋蒸的推荐依据。请问化合物热稳定性是否正常，有无分解温度约束？"
+        },
+        {
+          "role": "user",
+          "content": "热稳定性正常"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。为您推荐如下旋蒸执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-5 min 300 mbar → 5-15 min 降至 150 mbar → 15-20 min 降至 50 mbar\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "PE/EA",
+            "ratioA": 1,
+            "ratioB": 1,
+            "solventAmount": 280,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 15,
+                "pressure": 150
+              },
+              {
+                "time": 20,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成。机器人依次完成 tube 6-9 组分合并、旋蒸瓶架设与主程序运行。最终产物 335 mg，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-009",
+      "category": "column_then_rotovap",
+      "scenario": "用户极简口语 batch 输入，过柱前追问梯度起点原理，过柱完成后问旋蒸尾段压力原因",
+      "turns": [
+        {
+          "role": "user",
+          "content": "做个纯化，80mg 样品，化合物 Cc1ccccc1C(=O)Oc1ccccc1，TLC Rf 0.6，PE:EA 10:1，用小柱子。纯化完蒸干"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n2. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "嗯"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。80 mg 属于小量样品，为您推荐如下过柱执行参数：\n- 柱规格：4 g 硅胶柱\n- 硅胶用量：5 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 5% EA → 5-15 min 升至 15% EA → 15-20 min 升至 30% EA\n\n请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "这个体系 PE:EA 10:1 换成百分比大概 9%，你起始给 5%，是不是应该 9% 起？"
+        },
+        {
+          "role": "assistant",
+          "content": "这是个很好的问题。Rf 0.6 说明化合物在 9% EA 条件下「流得较远」（Rf 越大化合物洗脱越容易），实际过柱时起始浓度通常应比 TLC 浓度低 30-50%，以避免化合物与溶剂前沿同时下来、导致分不开。因此 5% 起始是合理的——若 5% 化合物尚未下来，10 min 后升至 15% 便会出峰。"
+        },
+        {
+          "role": "user",
+          "content": "懂了，下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "Cc1ccccc1C(=O)Oc1ccccc1",
+            "sampleAmount": "80",
+            "tlcRf": "0.6",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 10,
+            "tlcRatioB": 1,
+            "columnSpec": 4,
+            "silica": 5,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 5
+              },
+              {
+                "time": 5,
+                "ratio": 5
+              },
+              {
+                "time": 15,
+                "ratio": 15
+              },
+              {
+                "time": 20,
+                "ratio": 30
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "跑到哪了？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人目前在过柱通风橱执行过柱主程序。4 g 小柱总时长约 25 min，当前已运行 13 min，UV 已于 9.2 min 捕获主峰。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "实验室还有别的任务在跑吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "目前实验室运行中的实验快照：\n- Column-RXN089（过柱通风橱 2 号位）：主洗脱段，剩余 12 min\n- Rotovap-RXN102（旋蒸通风橱 1 号位）：主程序 60%，剩余约 8 min\n- 本任务（过柱通风橱 1 号位）：剩余 12 min\n\n共 3 项实验并行中。",
+          "query_payload": {
+            "tool": "get_running_experiments",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰 tube 3-4 已捕获，回收率约 80%（按 UV 峰面积估算，最终质量待旋蒸后称量）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 3-4 估算，**合并液预估约 100 ml PE/EA 低比例混合液（PE 占约九成，组分合并由机器人在旋蒸开始时完成）**，以此作为旋蒸的推荐依据。请问化合物热稳定性是否正常？"
+        },
+        {
+          "role": "user",
+          "content": "正常"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。基于以上（特别是 PE 占大头），为您推荐如下旋蒸执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-3 min 300 mbar → 3-10 min 降至 100 mbar → 10-15 min 降至 30 mbar\n\n由于 EA 含量低，降压速度可适当加快；尾段 30 mbar 是为处理最后少量 EA 残留。请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "最后 30 mbar 是因为 PE 占大头吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "正是。PE 沸点 40-60 °C，在 100 mbar 下已接近蒸干，尾段 30 mbar 仅处理最后少量 EA 残留。若 EA 占比更高（例如 1:1 体系），尾段压力到 50 mbar 即可。"
+        },
+        {
+          "role": "user",
+          "content": "OK 下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "PE/EA",
+            "ratioA": 10,
+            "ratioB": 1,
+            "solventAmount": 100,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 3,
+                "pressure": 300
+              },
+              {
+                "time": 10,
+                "pressure": 100
+              },
+              {
+                "time": 15,
+                "pressure": 30
+              }
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成。机器人依次完成 tube 3-4 组分合并、旋蒸瓶架设与主程序运行。最终产物 62 mg，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-010",
+      "category": "column_then_rotovap",
+      "scenario": "3 g 大量样品走 120 g 大柱，顺序下发，过柱完成后基于大体积合并液配置旋蒸",
+      "turns": [
+        {
+          "role": "user",
+          "content": "我这批样品量大，3 克，想上大柱过一下，然后旋蒸"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n2. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。3 g 属于大样品，请提供：SMILES、TLC 的 Rf 与展开剂体系。"
+        },
+        {
+          "role": "user",
+          "content": "SMILES O=C(NC1CCCCC1)c1ccc(cc1)C(F)(F)F，Rf 0.5，PE:EA 3:1"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，三氟甲基苯甲酰环己胺。为您推荐如下过柱执行参数：\n- 柱规格：120 g 硅胶柱\n- 硅胶用量：150 g\n- 洗脱体系：PE/EA\n- 梯度：0-10 min 15% EA（大柱上柱稳定段延长） → 10-40 min 升至 30% EA → 40-55 min 升至 45% EA\n\n整个过柱预计约 55 min，请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "时间能接受。流速用默认的吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "120 g 柱的默认流速为 40 ml/min，对此化合物合适，无需调整。"
+        },
+        {
+          "role": "user",
+          "content": "好，下发"
+        },
+        {
+          "role": "user",
+          "content": "120 g 柱库存还够吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "查询库存：120 g 硅胶柱当前剩余 3 根，本次使用 1 根后仍有 2 根；硅胶粉 5 kg 储备充足；PE 库存约 12 L、EA 约 8 L，大柱洗脱预计用量（约 1 L PE + 500 ml EA）在库存范围内。",
+          "query_payload": {
+            "tool": "get_material_inventory",
+            "arguments": {
+              "types": [
+                "silica_column",
+                "silica_powder",
+                "solvent"
+              ]
+            }
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。过柱完成后再与您确认旋蒸参数。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "O=C(NC1CCCCC1)c1ccc(cc1)C(F)(F)F",
+            "sampleAmount": "3000",
+            "tlcRf": "0.5",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 3,
+            "tlcRatioB": 1,
+            "columnSpec": 120,
+            "silica": 150,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 15
+              },
+              {
+                "time": 10,
+                "ratio": 15
+              },
+              {
+                "time": 40,
+                "ratio": 30
+              },
+              {
+                "time": 55,
+                "ratio": 45
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "现在在干嘛？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人在过柱通风橱架设硅胶柱和样品柱，120 g 硅胶柱已装载至过柱机并由顶部压紧机构固定。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "大柱流量监控着吧？"
+        },
+        {
+          "role": "assistant",
+          "content": "是的。当前流速稳定在 40 ml/min（默认值），柱压 0.3 bar 正常，无压力飙升。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰 tube 12-18 已捕获（共 7 管），回收率 87%，纯度 95%（按 UV 峰面积估算，最终质量待旋蒸后称量）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 12-18 估算，**合并液预估约 480 ml PE/EA 3:1**（组分合并将由机器人在旋蒸开始时完成）。实验室旋蒸瓶容量为 500 ml，本次合并液接近上限但可单瓶处理，无需分批。请告知化合物热稳定性是否正常？"
+        },
+        {
+          "role": "user",
+          "content": "知道了，热稳定性正常"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。为您推荐如下旋蒸执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-10 min 300 mbar → 10-25 min 降至 150 mbar → 25-35 min 降至 50 mbar（因体积较大，各段时间相应延长）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "PE/EA",
+            "ratioA": 3,
+            "ratioB": 1,
+            "solventAmount": 480,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 10,
+                "pressure": 300
+              },
+              {
+                "time": 25,
+                "pressure": 150
+              },
+              {
+                "time": 35,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成，耗时 35 min。机器人依次完成 tube 12-18 组分合并（实际合并液 485 ml，刚好在 500 ml 瓶内）、旋蒸瓶架设与主程序运行。最终产物 2.58 g，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-011",
+      "category": "column_then_rotovap",
+      "scenario": "热敏感化合物（70°C 分解），过柱常规+旋蒸低温顺序下发，用户追问压力档原理",
+      "turns": [
+        {
+          "role": "user",
+          "content": "这个化合物热稳定性不太好，70 度以上会分解。粗品 200 mg，纯化完蒸掉溶剂"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n2. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对的"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。热敏感样品的关键环节在于旋蒸（待过柱完成后我会重点考虑），过柱属室温操作不受影响。先配置过柱，请提供 SMILES 和 TLC 数据。"
+        },
+        {
+          "role": "user",
+          "content": "SMILES O=Cc1ccc2OCOc2c1，TLC Rf 0.4，PE:EA 4:1"
+        },
+        {
+          "role": "assistant",
+          "content": "胡椒醛（3,4-亚甲二氧基苯甲醛）。为您推荐如下过柱执行参数：\n- 柱规格：12 g 硅胶柱\n- 硅胶用量：15 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 15% EA → 5-20 min 升至 30% EA → 20-25 min 升至 45% EA\n\n请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。过柱完成后再针对 70°C 分解的约束配置旋蒸。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "O=Cc1ccc2OCOc2c1",
+            "sampleAmount": "200",
+            "tlcRf": "0.4",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 4,
+            "tlcRatioB": 1,
+            "columnSpec": 12,
+            "silica": 15,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 15
+              },
+              {
+                "time": 5,
+                "ratio": 15
+              },
+              {
+                "time": 20,
+                "ratio": 30
+              },
+              {
+                "time": 25,
+                "ratio": 45
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "过柱好了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "过柱主程序刚完成，当前正在进行管路清洗与空气吹扫。主峰 tube 6-8 已捕获，回收率 88%，纯度 94%（按 UV 峰面积估算，最终质量待旋蒸后称量）。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 6-8 估算，**合并液预估约 180 ml PE/EA 4:1**（组分合并由机器人在旋蒸开始时执行），以此作为旋蒸的推荐依据。您此前已告知化合物 70 °C 以上分解，确认除此之外没有其他新增约束吗？"
+        },
+        {
+          "role": "user",
+          "content": "没有其他约束"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。鉴于 70 °C 分解阈值，为您推荐如下旋蒸执行参数：\n- 水浴温度：30 °C（远低于分解温度，确保安全）\n- 压力梯度：0-5 min 400 mbar（温和除 PE） → 5-20 min 降至 150 mbar（除 EA） → 20-30 min 降至 50 mbar（抽尾）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "这个压力档跟常规 PE/EA 旋蒸差不多啊？"
+        },
+        {
+          "role": "assistant",
+          "content": "是的。真正起低温保护作用的是水浴温度（30 °C 对比常规 40 °C），并非压力。化合物在 30 °C 水浴下完全不会分解，因此压力按常规档位即可。关键原则是：水浴温度必须低于分解温度一定余量（本例 30 °C 远低于 70 °C），压力即可按常规档位设置。"
+        },
+        {
+          "role": "user",
+          "content": "懂了，下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "PE/EA",
+            "ratioA": 4,
+            "ratioB": 1,
+            "solventAmount": 180,
+            "temp": 30,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 400
+              },
+              {
+                "time": 5,
+                "pressure": 400
+              },
+              {
+                "time": 20,
+                "pressure": 150
+              },
+              {
+                "time": 30,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "旋蒸水浴升到位了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸水浴正在升温至 30 °C，当前 27 °C；真空泵同时启动中。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成，耗时 32 min（30 °C 低温方案下略长于常规）。机器人依次完成 tube 6-8 组分合并、旋蒸瓶架设与主程序运行。最终产物 176 mg，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-012",
+      "category": "column_then_rotovap",
+      "scenario": "基于上次 RXN012 参数续跑，过柱→旋蒸顺序下发",
+      "turns": [
+        {
+          "role": "user",
+          "content": "还是 RXN012 那个化合物，又合成了一批 300 mg，跟上次一样过柱加旋蒸"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography，RXN012 batch2）\n2. 旋蒸（Rotary Evaporation，RXN012 batch2）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1,
+                "taskName": "Column-RXN012-batch2"
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2,
+                "taskName": "Rotovap-RXN012-batch2"
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，我调取 RXN012 上次的参数作为基础。请问本批与上次相比合成条件是否一致（反应温度、试剂批号等）？这关系到能否沿用上次的 TLC Rf。"
+        },
+        {
+          "role": "user",
+          "content": "完全一样，TLC 也没重跑"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，沿用上次的 TLC 参数（Rf 0.45，PE:EA 3:2）。基于 300 mg 样品量（较上次 250 mg 略增），为您推荐如下过柱执行参数：\n- 柱规格：25 g 硅胶柱（沿用）\n- 硅胶用量：35 g（由上次 30 g 略增）\n- 洗脱体系：PE/EA（沿用）\n- 梯度：0-8 min 20% EA（稳定段延至 8 min） → 8-20 min 升至 40% → 20-30 min 升至 55%\n\n请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "可以。顺便把 batch1 的执行事件调出来看看"
+        },
+        {
+          "role": "assistant",
+          "content": "RXN012 batch1 的关键执行事件（2026-04-10）：\n- 22:14 过柱任务下发（Column-RXN012）\n- 22:19 进入润柱阶段\n- 22:26 正式过柱开始\n- 22:48 主峰 UV 信号检测（保留时间 14.2 min）\n- 23:02 过柱主程序完成，回收率 85%\n- 23:12 组分合并至旋蒸瓶\n- 23:38 旋蒸任务完成，最终产物 168 mg\n\n全程无异常，作为 batch2 的基准参考。",
+          "query_payload": {
+            "tool": "get_entity_events",
+            "arguments": {
+              "entity_type": "compound",
+              "entity_id": "RXN012",
+              "batch": "batch1"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务（batch2）已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "taskName": "Column-RXN012-batch2",
+            "reactionSmiles": "COc1ccc2[nH]c(-c3ccc(F)cc3)nc2c1",
+            "sampleAmount": "300",
+            "tlcRf": "0.45",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 3,
+            "tlcRatioB": 2,
+            "columnSpec": 25,
+            "silica": 35,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 20
+              },
+              {
+                "time": 8,
+                "ratio": 20
+              },
+              {
+                "time": 20,
+                "ratio": 40
+              },
+              {
+                "time": 30,
+                "ratio": 55
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "机器人在哪个阶段？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人目前在过柱通风橱安装试管架——试管架已推入过柱机接液工作位，下一步进入过柱主程序。",
+          "query_payload": {
+            "tool": "get_robot_status",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "过柱结束了提醒我"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，完成时会即时通知您。"
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务（batch2）已完成。主峰 tube 8-10 已捕获（与 batch1 基本一致），回收率 84%（与 batch1 的 82% 基本持平，按 UV 峰面积估算）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 8-10 估算，**合并液预估约 350 ml PE/EA 3:2**（组分合并由机器人在旋蒸开始时执行），以此作为旋蒸的推荐依据。您本批合成条件与 batch1 完全一致，请问是否沿用 batch1 的旋蒸方案，或有新增约束？"
+        },
+        {
+          "role": "user",
+          "content": "沿用"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。沿用 batch1 方案，为您推荐如下旋蒸执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-5 min 300 mbar → 5-15 min 150 mbar → 15-20 min 50 mbar\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务（batch2）已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "taskName": "Rotovap-RXN012-batch2",
+            "system": "PE/EA",
+            "ratioA": 3,
+            "ratioB": 2,
+            "solventAmount": 350,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 15,
+                "pressure": 150
+              },
+              {
+                "time": 20,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成。机器人依次完成 tube 8-10 组分合并、旋蒸瓶架设与主程序运行。最终产物 248 mg，与 batch1 的 250 mg 相当，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-013",
+      "category": "column_then_rotovap",
+      "scenario": "极性化合物 DCM/MeOH 体系，过柱前追问梯度起点，旋蒸前追问 DCM 暴沸",
+      "turns": [
+        {
+          "role": "user",
+          "content": "帮我过柱+旋蒸。化合物 SMILES 是 NC(=O)c1ccc(cn1)NC(=O)C1CCNCC1，比较极性"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n2. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "可以"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，吡啶甲酰胺连哌啶结构，含自由 NH 与两个羰基，确实极性偏高。请提供粗品量和 TLC 数据。"
+        },
+        {
+          "role": "user",
+          "content": "180 mg，TLC 用 DCM:MeOH 10:1 跑，Rf 0.25"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您推荐如下过柱执行参数：\n- 柱规格：12 g 硅胶柱\n- 硅胶用量：15 g\n- 洗脱体系：DCM/MeOH\n- 梯度：0-5 min 纯 DCM（0% MeOH） → 5-20 min 升至 5% MeOH → 20-30 min 升至 10% MeOH\n\nRf 0.25 的主峰预计出现在 5-7% MeOH 段。请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "0-5 min 为什么纯 DCM，不是起始给点 MeOH 更好吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "TLC Rf 0.25 是在约 9% MeOH 条件下跑出，过柱起始浓度通常应比 TLC 浓度低一半左右，以便化合物与硅胶充分相互作用。若起始就给到 5% MeOH，化合物会跟随样品前沿一起下来、拖尾严重。因此 0-5 min 设置纯 DCM 让样品先「稳定下来」，再开始爬梯度。"
+        },
+        {
+          "role": "user",
+          "content": "懂了，下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "NC(=O)c1ccc(cn1)NC(=O)C1CCNCC1",
+            "sampleAmount": "180",
+            "tlcRf": "0.25",
+            "tlcSystem": "DCM/MeOH",
+            "tlcRatioA": 10,
+            "tlcRatioB": 1,
+            "columnSpec": 12,
+            "silica": 15,
+            "eluent": "DCM/MeOH",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 0
+              },
+              {
+                "time": 5,
+                "ratio": 0
+              },
+              {
+                "time": 20,
+                "ratio": 5
+              },
+              {
+                "time": 30,
+                "ratio": 10
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "主峰出来了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "已出现。当前运行 15 min，主峰保留时间 11.6 min，对应梯度约 4% MeOH，与预期窗口（5-7% MeOH 段）基本吻合。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰 tube 5-7 已捕获，回收率 82%，纯度 95%（按 UV 峰面积估算，最终质量待旋蒸后称量）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 5-7 估算，**合并液预估约 150 ml DCM/MeOH 低比例混合液（DCM 占大头，组分合并由机器人在旋蒸开始时执行）**，以此作为旋蒸的推荐依据。请问化合物热稳定性是否正常，有无其他约束？"
+        },
+        {
+          "role": "user",
+          "content": "热稳定性正常"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。DCM 容易飞，为您推荐如下旋蒸执行参数：\n- 水浴温度：35 °C（兼顾 DCM 与 MeOH）\n- 压力梯度：0-5 min 600 mbar（温和除 DCM，防暴沸） → 5-15 min 降至 300 mbar（除 MeOH 主体） → 15-25 min 降至 80 mbar（抽尾）\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "DCM 起点 600 mbar 够温和吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "足够。DCM 在 600 mbar 下的沸点约为 30 °C，您的 35 °C 水浴仅比它高 5 °C，蒸发是温和而稳定的，不会暴沸。相比之下 PE/EA 体系起点用 300 mbar 是因为 PE 沸点更高（40-60 °C），不易暴沸；DCM 起点高一档正是为了防暴沸。"
+        },
+        {
+          "role": "user",
+          "content": "OK 下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "DCM/MeOH",
+            "ratioA": 10,
+            "ratioB": 1,
+            "solventAmount": 150,
+            "temp": 35,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 600
+              },
+              {
+                "time": 5,
+                "pressure": 600
+              },
+              {
+                "time": 15,
+                "pressure": 300
+              },
+              {
+                "time": 25,
+                "pressure": 80
+              }
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成（DCM 温和降压生效，无暴沸记录）。机器人依次完成 tube 5-7 组分合并、旋蒸瓶架设与主程序运行。最终产物 142 mg，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-014",
+      "category": "column_then_rotovap",
+      "scenario": "Boc 化合物，用户样品未精确称量，过柱前追问硅胶兼容性，旋蒸前追问低温能否蒸干",
+      "turns": [
+        {
+          "role": "user",
+          "content": "做个过柱加旋蒸，化合物 CC(C)(C)OC(=O)N1CCN(CC1)c1ccc(C=O)cc1，粗品大概 350 mg 吧"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您生成任务计划：\n1. 过柱（Column Chromatography）\n2. 旋蒸（Rotary Evaporation）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "column",
+                "sequence": 1
+              },
+              {
+                "task_type": "rotovap",
+                "sequence": 2
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "收到，Boc 哌嗪连苯甲醛。请问您所说的「大约 350 mg」是已经称量过还是估值？过柱柱规格若差一档可能影响分离效果，建议确认准确值。同时烦请一并告知 TLC 的 Rf 与展开剂体系。"
+        },
+        {
+          "role": "user",
+          "content": "称了 328 mg，Rf 0.5，PE:EA 5:1"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您推荐如下过柱执行参数：\n- 柱规格：25 g 硅胶柱（12 g 柱上限 200 mg，25 g 更稳妥）\n- 硅胶用量：30 g\n- 洗脱体系：PE/EA\n- 梯度：0-5 min 10% EA → 5-20 min 升至 25% EA → 20-28 min 升至 40% EA\n\n请问是否可以？"
+        },
+        {
+          "role": "user",
+          "content": "这个化合物有 Boc 基团，酸不稳定，硅胶有影响吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "这是个很好的问题。常规硅胶表面为 -Si-OH 呈弱酸性，Boc 理论上会缓慢脱除。但过柱流经时间较短（20-30 min）、PE/EA 为中性体系，实际脱 Boc 的程度可忽略不计。若您对纯度要求极高或该化合物历史上有过脱 Boc 记录，可以预先用 1% 三乙胺/PE 润湿硅胶以钝化酸性位点。请问是否需要此预处理？"
+        },
+        {
+          "role": "user",
+          "content": "不用了，常规硅胶就行"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，过柱任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "column",
+            "reactionSmiles": "CC(C)(C)OC(=O)N1CCN(CC1)c1ccc(C=O)cc1",
+            "sampleAmount": "328",
+            "tlcRf": "0.5",
+            "tlcSystem": "PE/EA",
+            "tlcRatioA": 5,
+            "tlcRatioB": 1,
+            "columnSpec": 25,
+            "silica": 30,
+            "eluent": "PE/EA",
+            "gradient": [
+              {
+                "time": 0,
+                "ratio": 10
+              },
+              {
+                "time": 5,
+                "ratio": 10
+              },
+              {
+                "time": 20,
+                "ratio": 25
+              },
+              {
+                "time": 28,
+                "ratio": 40
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "Boc 脱了没？"
+        },
+        {
+          "role": "assistant",
+          "content": "从 UV 信号判断，当前主峰保留时间 14.2 min，在预期窗口（12-16 min）内，无显著次峰（强度 >3%）。Boc 若脱除会在更早保留时间出现小极性斑，目前未见。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "过柱任务已完成。主峰 tube 6-9 已捕获，回收率 88%，纯度 94%，Boc 完整性良好（按 UV 峰面积估算，最终质量待旋蒸后称量）。"
+        },
+        {
+          "role": "assistant",
+          "content": "接下来配置旋蒸。基于主峰 tube 6-9 估算，**合并液预估约 200 ml PE/EA 5:1**（组分合并由机器人在旋蒸开始时执行），以此作为旋蒸的推荐依据。Boc 热稳定性一般（60 °C 以上缓慢分解），确认除此之外没有新增约束吗？"
+        },
+        {
+          "role": "user",
+          "content": "没有其他约束"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。考虑 Boc 热稳定性，为您推荐如下旋蒸执行参数：\n- 水浴温度：35 °C（比常规 40 °C 略低，保留 25 °C 安全余量）\n- 压力梯度：0-5 min 300 mbar → 5-15 min 降至 150 mbar → 15-20 min 降至 50 mbar\n\n请问是否可以下发？"
+        },
+        {
+          "role": "user",
+          "content": "35 能蒸干吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "可以蒸干。PE 沸点 40-60 °C，在 35 °C 水浴 + 300 mbar 下蒸发速率仍有常规的约 80%；EA 沸点 77 °C，通过降压可以弥补。整体时长与常规 40 °C 方案接近。"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "system": "PE/EA",
+            "ratioA": 5,
+            "ratioB": 1,
+            "solventAmount": 200,
+            "temp": 35,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 15,
+                "pressure": 150
+              },
+              {
+                "time": 20,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成，耗时 24 min（水浴 35 °C 低温方案）。机器人依次完成 tube 6-9 组分合并、旋蒸瓶架设与主程序运行。最终产物 285 mg，Boc 完整性复核良好，已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-015",
+      "category": "query",
+      "scenario": "查询当前执行中任务，用户多维度追问（保留时间/峰宽/次峰/分离度）",
+      "turns": [
+        {
+          "role": "user",
+          "content": "我刚下发的过柱现在怎么样了？"
+        },
+        {
+          "role": "assistant",
+          "content": "您最近下发的过柱任务 Column-RXN045-rerun 当前状态为**执行中**。已运行 12 min，当前处于 8-25 min 线性升梯度段（5% → 20% EA）。UV 检测刚捕获到第一个主峰信号，保留时间 14.3 min。预计剩余 23 min 完成。",
+          "query_payload": {
+            "tool": "get_task_status",
+            "arguments": {
+              "task_id": "Column-RXN045-rerun"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "主峰出在 14.3 min，符合预期。峰宽怎么样？"
+        },
+        {
+          "role": "assistant",
+          "content": "当前主峰半峰宽约 1.4 min，比上次重跑前的 2.8 min 缩窄一半。说明梯度优化效果显著，拖尾明显改善。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN045-rerun"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "有没有次峰？"
+        },
+        {
+          "role": "assistant",
+          "content": "目前观察到一个小信号位于 16.8 min，强度仅为主峰的 8%，与主峰基线分离。初步判断为杂质或副产物。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN045-rerun"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "分离度算过了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "两峰间距 2.5 min，主峰半峰宽 1.4 min、次峰半峰宽 0.9 min，计算 Rs（分离度）约 2.2，已达到基线分离标准。收集主峰时不会引入次峰。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN045-rerun"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "实验室目前还有哪些任务在跑？"
+        },
+        {
+          "role": "assistant",
+          "content": "当前运行中的实验：\n- 本任务 Column-RXN045-rerun：过柱通风橱 1 号位，剩余 23 min\n- Rotovap-RXN088：旋蒸通风橱 2 号位，剩余约 6 min\n\n共 2 项实验并行。",
+          "query_payload": {
+            "tool": "get_running_experiments",
+            "arguments": {}
+          }
+        },
+        {
+          "role": "user",
+          "content": "最近半小时实验室有什么事件？"
+        },
+        {
+          "role": "assistant",
+          "content": "近 30 分钟关键事件（按时间倒序）：\n- [14:22] Column-RXN045-rerun 进入主洗脱段\n- [14:18] Column-RXN045-rerun 主峰 UV 信号首次捕获（14.3 min 保留时间）\n- [14:10] Rotovap-RXN088 进入 150 mbar 段\n- [14:02] Column-RXN045-rerun 润柱完成\n- [13:55] 废液桶装载完成\n\n无告警或异常事件。",
+          "query_payload": {
+            "tool": "get_recent_events",
+            "arguments": {
+              "window_minutes": 30
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "好，执行完通知我，我下游还要继续做"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，任务完成后会即时推送通知，通知中将附带主馏分 tube 编号和回收率摘要。"
+        }
+      ]
+    },
+    {
+      "id": "conv-016",
+      "category": "query",
+      "scenario": "查询昨晚过柱结果，分析回收率偏低的原因并下发旋蒸",
+      "turns": [
+        {
+          "role": "user",
+          "content": "我昨晚那个过柱跑完了吗？结果怎么样？"
+        },
+        {
+          "role": "assistant",
+          "content": "您昨晚 22:14 下发的 Column-RXN012 已于今天凌晨 03:47 完成。结果摘要：\n- 回收率：78%\n- 主峰纯度：92%\n- 主馏分：tube 7-9（共 3 管）\n- 回收质量：195 mg\n- 色谱图：主峰分离清晰",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN012"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "回收率 78% 有点低，哪里损失了？"
+        },
+        {
+          "role": "assistant",
+          "content": "有两处原因：\n1. TLC Rf 0.45 + 梯度起点 20% EA，起点略低，前段 tube 3-5 有少量化合物未完全洗出\n2. tube 6 和 tube 10 存在边缘信号（各占 3-5%），当时按严格纯度标准未纳入合并\n\n若补合并 tube 6+10，回收率可回升至约 85%。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN012"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "这两个边缘管补合并后纯度会降多少？"
+        },
+        {
+          "role": "assistant",
+          "content": "合并 tube 6+10 后，主馏分纯度会由 92% 降至约 88%。若下游可接受 ≥85%，此合并操作值得执行。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN012"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "下游要求 ≥85% 就行。合并吧，旋蒸一起安排"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，已记录：手动合并 tube 6+10 至 flask-1。为您生成任务计划：\n1. 旋蒸（Rotary Evaporation，RXN012 合并液）\n\n请确认此计划是否符合预期？",
+          "plan_payload": {
+            "nodes": [
+              {
+                "task_type": "rotovap",
+                "sequence": 1,
+                "taskName": "Rotovap-RXN012-merged"
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "对"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。合并液总体积约 320 ml PE/EA 3:2，为您推荐如下旋蒸执行参数：\n- 水浴温度：40 °C\n- 压力梯度：0-5 min 300 mbar → 5-15 min 150 mbar → 15-20 min 50 mbar\n\n请问是否下发？"
+        },
+        {
+          "role": "user",
+          "content": "下发"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，旋蒸任务已为您下发。",
+          "dispatch_payload": {
+            "task_type": "rotovap",
+            "taskName": "Rotovap-RXN012-merged",
+            "system": "PE/EA",
+            "ratioA": 3,
+            "ratioB": 2,
+            "solventAmount": 320,
+            "temp": 40,
+            "pressureGradient": [
+              {
+                "time": 0,
+                "pressure": 300
+              },
+              {
+                "time": 5,
+                "pressure": 300
+              },
+              {
+                "time": 15,
+                "pressure": 150
+              },
+              {
+                "time": 20,
+                "pressure": 50
+              }
+            ]
+          }
+        },
+        {
+          "role": "user",
+          "content": "旋蒸开始了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "机器人已完成旋蒸瓶架设——茄形瓶精准对接旋蒸仪，真空负压锁定气密性确认。刚启动旋蒸。"
+        },
+        {
+          "role": "user",
+          "content": "水浴温度对吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "水浴稳定在 40 °C（设定值），压力当前 290 mbar，正向 300 mbar 起始段趋近。"
+        },
+        {
+          "role": "assistant",
+          "content": "旋蒸任务已完成。最终产物 183 mg，茄形瓶已卸载至旋蒸区产物放置点。"
+        }
+      ]
+    },
+    {
+      "id": "conv-017",
+      "category": "query",
+      "scenario": "查询上周多任务历史，对比分析并下钻到单条",
+      "turns": [
+        {
+          "role": "user",
+          "content": "上周几个嘧啶类化合物的过柱回收率怎么样？"
+        },
+        {
+          "role": "assistant",
+          "content": "查询到 2026-04-14 至 2026-04-20 期间涉及嘧啶结构的过柱任务共 4 条：\n\n| 任务 | 化合物 | 上样 | 柱规格 | 回收率 | 纯度 |\n|---|---|---|---|---|---|\n| Column-RXN089 | 2-氨基-4-氯嘧啶衍生物 | 200 mg | 25 g | 82% | 95% |\n| Column-RXN091 | 2,4-二取代嘧啶 | 350 mg | 40 g | 68% | 88% |\n| Column-RXN094 | 嘌呤-嘧啶缀合物 | 120 mg | 12 g | 75% | 91% |\n| Column-RXN097 | 5-氟嘧啶羧酸 | 180 mg | 25 g | 85% | 96% |\n\n平均回收率 77.5%，RXN091 明显偏低。",
+          "query_payload": {
+            "tool": "list_tasks",
+            "arguments": {
+              "date_from": "2026-04-14",
+              "date_to": "2026-04-20",
+              "structure_filter": "pyrimidine"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "RXN091 为啥这么低？"
+        },
+        {
+          "role": "assistant",
+          "content": "RXN091 的色谱图显示主峰（保留时间 13.2 min）与次峰（14.8 min）部分重叠。主峰峰宽 1.8 min、次峰 1.1 min，峰间距 1.6 min，计算 Rs 约为 1.1，分离度不足。合并时为保证纯度，丢弃了主峰两侧边缘，因此回收率偏低。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN091"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "那下次怎么改？"
+        },
+        {
+          "role": "assistant",
+          "content": "根源是梯度问题。原梯度 0-5 min 25% EA → 5-18 min 45% → 18-25 min 60%，中段 13 min 爬升 20%，速率偏快。建议两处调整：\n1. 中段延长至 20 min：5-25 min 45% EA\n2. 在 40-45% EA 段增加 3-5 min 的 hold\n\n这样可使主次峰在 40-45% EA 窗口充分分开。",
+          "query_payload": {
+            "tool": "get_task_detail",
+            "arguments": {
+              "task_id": "Column-RXN091"
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "这个化合物（2,4-二取代嘧啶）过去是不是都有分离度问题？"
+        },
+        {
+          "role": "assistant",
+          "content": "查询该化合物结构类（2,4-二取代嘧啶）的历史任务事件，近 3 个月共 5 条：\n- Column-RXN067（2026-02-18）：Rs 1.3，分离偏低\n- Column-RXN081（2026-03-22）：Rs 1.8，改进后仍偏低\n- Column-RXN091（2026-04-15）：Rs 1.1，最差\n- Column-RXN098（2026-04-24）：Rs 2.0，首次达基线\n- 本次重跑：计划值\n\n确实是该结构类的共性问题，核心是主峰与 2 位副产物极性接近（Δlog P ≈ 0.3）。RXN098 成功关键是 40-45% EA 段 hold 了 5 min。",
+          "query_payload": {
+            "tool": "get_entity_events",
+            "arguments": {
+              "entity_type": "compound_class",
+              "entity_id": "2,4-disubstituted-pyrimidine",
+              "window_months": 3
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": "下周重跑一次，帮我记下这个建议"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，已为您记录为 RXN091 的重跑优化建议。下次您提及 RXN091 时，我会自动带出此梯度方案。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，暂时没别的了"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，如有需要请随时告知。"
+        }
+      ]
+    },
+    {
+      "id": "conv-018",
+      "category": "negative",
+      "scenario": "完全无关的生活请求，agent 礼貌拒绝并引导回主业",
+      "turns": [
+        {
+          "role": "user",
+          "content": "帮我泡杯咖啡"
+        },
+        {
+          "role": "assistant",
+          "content": "抱歉，我是 Talos 化学实验室助手，目前能为您提供的服务是**过柱和旋蒸**任务的下发，以及历史任务结果的查询。泡咖啡不在我的能力范围内。\n\n请问您今天有纯化任务需要安排吗？"
+        },
+        {
+          "role": "user",
+          "content": "没有，就问问"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，如有需要请随时告知。"
+        }
+      ]
+    },
+    {
+      "id": "conv-019",
+      "category": "negative",
+      "scenario": "翻译请求，agent 拒绝但提示如何转化为可处理任务",
+      "turns": [
+        {
+          "role": "user",
+          "content": "帮我翻译这句：The column was eluted with a gradient of ethyl acetate in hexanes"
+        },
+        {
+          "role": "assistant",
+          "content": "抱歉，我不提供文本翻译服务，专注于 Talos 的过柱和旋蒸任务下发与查询。\n\n不过您这句文献描述的是过柱条件——「使用 EA/正己烷梯度洗脱」。若您希望将此文献条件转化为一个可执行的过柱任务，我可以协助配置，只需您补充几个参数：样品量、化合物 SMILES、TLC 的 Rf 和展开剂比例。"
+        },
+        {
+          "role": "user",
+          "content": "先不用，就是想翻译"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，后续有纯化相关需要请随时与我联系。"
+        }
+      ]
+    },
+    {
+      "id": "conv-020",
+      "category": "negative",
+      "scenario": "要求做合成反应，agent 说明支持范围并衔接后续纯化",
+      "turns": [
+        {
+          "role": "user",
+          "content": "我想做一个 Suzuki 偶联反应，能帮我下发吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "抱歉，Talos 目前仅支持**过柱（柱层析）**和**旋蒸**两类实验室任务。Suzuki 偶联属于合成反应，需要您在反应台自行完成。\n\n待您完成 Suzuki 反应、获得粗品后，我可以接手协助您处理后续的过柱纯化和旋蒸。届时只需告知我粗品量和 TLC 数据即可。"
+        },
+        {
+          "role": "user",
+          "content": "好，那我先去反应，回头找你"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，期待您的粗品数据。"
+        }
+      ]
+    }
+  ]
+}
