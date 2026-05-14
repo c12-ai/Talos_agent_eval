@@ -95,7 +95,11 @@
       "Bash(ps -p 31489 31491 -o pid,etime,state,cputime)",
       "Bash(curl -sS --max-time 5 --noproxy '*' \"http://192.168.12.239:8080/api/health\")",
       "Bash(curl -sS --max-time 5 --noproxy '*' \"http://192.168.12.239:8080/api/agent/threads/cac204eb-afa3-4626-9a3e-5fb33ab2db9a/state\")",
-      "Bash(curl -sS --max-time 5 --noproxy '*' \"http://192.168.12.239:8080/api/agent/threads/f2ea0640-7e9c-4677-a9fc-587d3881c377/state\")"
+      "Bash(curl -sS --max-time 5 --noproxy '*' \"http://192.168.12.239:8080/api/agent/threads/f2ea0640-7e9c-4677-a9fc-587d3881c377/state\")",
+      "Skill(qa)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
