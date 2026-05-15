@@ -41,6 +41,7 @@ DEFAULT_CHROME_FOR_TESTING = (
     "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
 )
 DEFAULT_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "discarded", "timeout"}
 
 
 def log(message: str) -> None:
@@ -232,6 +233,19 @@ def send_chat_message(page: Page, text: str) -> None:
     textarea.click()
     textarea.fill(text)
     textarea.press("Enter")
+    sleep(2)
+
+
+def textarea_enabled(page: Page) -> bool:
+    try:
+        textarea = page.locator("textarea[placeholder*='TALOS'], textarea").first
+        return textarea.count() > 0 and textarea.get_attribute("disabled") is None
+    except Exception:
+        return False
+
+
+def wait_for_agent(page: Page, timeout: float = 180) -> None:
+    wait_until(lambda: textarea_enabled(page), timeout=timeout, description="agent response complete")
     sleep(2)
 
 
@@ -541,31 +555,42 @@ def wait_for_submission_state(base_url: str, session_id: str, timeout: float = 6
     return last_state
 
 
-def ask_progress_questions_if_running(page: Page, base_url: str, session_id: str) -> list[str]:
-    """Mandatory post-submit progress questions while the lab run is active."""
-    questions = [
-        "机器人现在在干嘛？",
-        "这个过柱任务跑到第几步了？",
-    ]
-    terminal_statuses = {"completed", "failed", "cancelled", "discarded", "timeout"}
-    asked = []
+def get_first_task_run(base_url: str, session_id: str) -> dict:
     state = get_workflow_state(base_url, session_id)
     tasks = state.get("tasks") or []
-    run = (tasks[0].get("latest_run") or {}) if tasks else {}
-    if not run.get("lab_server_id") or run.get("status") in terminal_statuses:
-        log("skip progress questions: no active lab run")
-        return asked
+    return (tasks[0].get("latest_run") or {}) if tasks else {}
+
+
+def ask_progress_questions_if_running(page: Page, base_url: str, session_id: str) -> tuple[list[str], str | None]:
+    """Mandatory post-submit progress questions while the lab run is active."""
+    questions = ["这个过柱任务跑到第几步了？"]
+    asked = []
+    run = get_first_task_run(base_url, session_id)
+    if not run.get("lab_server_id"):
+        reason = "task has no active lab run"
+        log(f"skip progress questions: {reason}")
+        return asked, reason
+    if run.get("status") in TERMINAL_RUN_STATUSES:
+        reason = f"task already terminal: {run.get('status')}"
+        log(f"skip progress questions: {reason}")
+        return asked, reason
 
     for question in questions:
-        current = get_workflow_state(base_url, session_id)
-        current_tasks = current.get("tasks") or []
-        current_run = (current_tasks[0].get("latest_run") or {}) if current_tasks else {}
-        if current_run.get("status") in terminal_statuses:
-            break
+        current_run = get_first_task_run(base_url, session_id)
+        if current_run.get("status") in TERMINAL_RUN_STATUSES:
+            reason = f"task already terminal: {current_run.get('status')}"
+            log(f"stop progress questions: {reason}")
+            return asked, reason
         send_chat_message(page, question)
+        wait_for_agent(page)
         asked.append(question)
+        current_run = get_first_task_run(base_url, session_id)
+        if current_run.get("status") in TERMINAL_RUN_STATUSES:
+            reason = f"task reached terminal after reply: {current_run.get('status')}"
+            log(f"stop progress questions: {reason}")
+            return asked, reason
     log(f"asked progress questions: {asked}")
-    return asked
+    return asked, None
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -602,7 +627,7 @@ def run(args: argparse.Namespace) -> dict:
             upload_tlc_and_confirm_spec(page, args.tlc_image, args.rf)
             submit_cc_params(page, args.base_url, args.slot_label, args.slot_id)
             state = wait_for_submission_state(args.base_url, session_id)
-            progress_questions = ask_progress_questions_if_running(page, args.base_url, session_id)
+            progress_questions, progress_questions_skipped = ask_progress_questions_if_running(page, args.base_url, session_id)
 
             result = {
                 "title": title,
@@ -613,6 +638,7 @@ def run(args: argparse.Namespace) -> dict:
                 "tlc_image": args.tlc_image,
                 "workflow_state": state,
                 "progress_questions": progress_questions,
+                "progress_questions_skipped": progress_questions_skipped,
             }
             return result
         finally:

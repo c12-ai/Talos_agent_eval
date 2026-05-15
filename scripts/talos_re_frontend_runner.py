@@ -47,6 +47,7 @@ DEFAULT_PROMPT = (
     "水浴 35 度，收集 1-5 号试管，气压梯度每段时长都设为 1 分钟。"
     "请生成方案，我会在右侧面板确认。"
 )
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "discarded", "timeout"}
 
 
 def log(message: str) -> None:
@@ -281,30 +282,39 @@ def wait_for_submission_state(base_url: str, session_id: str, timeout: float = 9
     return last_state
 
 
-def ask_progress_questions_if_running(page: Page, base_url: str, session_id: str) -> list[str]:
+def ask_progress_questions_if_running(page: Page, base_url: str, session_id: str) -> tuple[list[str], str | None]:
     """Mandatory post-submit progress questions while the lab run is active."""
-    questions = [
-        "机器人现在在干嘛？",
-        "这个旋蒸任务跑到第几步了？",
-    ]
-    terminal_statuses = {"completed", "failed", "cancelled", "discarded", "timeout"}
+    questions = ["这个旋蒸任务跑到第几步了？"]
     asked = []
     task = get_first_task_state(base_url, session_id)
     run = task.get("latest_run") or {}
-    if not run.get("lab_server_id") or run.get("status") in terminal_statuses:
-        log("skip progress questions: no active lab run")
-        return asked
+    if not run.get("lab_server_id"):
+        reason = "task has no active lab run"
+        log(f"skip progress questions: {reason}")
+        return asked, reason
+    if run.get("status") in TERMINAL_RUN_STATUSES:
+        reason = f"task already terminal: {run.get('status')}"
+        log(f"skip progress questions: {reason}")
+        return asked, reason
 
     for question in questions:
-        current = get_workflow_state(base_url, session_id)
         current_task = get_first_task_state(base_url, session_id)
         current_run = current_task.get("latest_run") or {}
-        if current_run.get("status") in terminal_statuses:
-            break
+        if current_run.get("status") in TERMINAL_RUN_STATUSES:
+            reason = f"task already terminal: {current_run.get('status')}"
+            log(f"stop progress questions: {reason}")
+            return asked, reason
         send_chat_message(page, question)
+        wait_for_agent(page)
         asked.append(question)
+        current_task = get_first_task_state(base_url, session_id)
+        current_run = current_task.get("latest_run") or {}
+        if current_run.get("status") in TERMINAL_RUN_STATUSES:
+            reason = f"task reached terminal after reply: {current_run.get('status')}"
+            log(f"stop progress questions: {reason}")
+            return asked, reason
     log(f"asked progress questions: {asked}")
-    return asked
+    return asked, None
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -341,7 +351,7 @@ def run(args: argparse.Namespace) -> dict:
             confirm_re_spec(page, args.base_url, session_id)
             submit_re_params(page, args.temperature, args.duration, args.tube_count)
             state = wait_for_submission_state(args.base_url, session_id)
-            progress_questions = ask_progress_questions_if_running(page, args.base_url, session_id)
+            progress_questions, progress_questions_skipped = ask_progress_questions_if_running(page, args.base_url, session_id)
             return {
                 "title": title,
                 "session_id": session_id,
@@ -351,6 +361,7 @@ def run(args: argparse.Namespace) -> dict:
                 "tube_count": args.tube_count,
                 "workflow_state": state,
                 "progress_questions": progress_questions,
+                "progress_questions_skipped": progress_questions_skipped,
             }
         finally:
             if args.keep_open and args.headed:

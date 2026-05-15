@@ -69,14 +69,26 @@ def main() -> None:
         try:
             open_session(page, args.base_url, args.session_id)
             before = get_workflow_state(args.base_url, args.session_id)
+            before_tasks = before.get("tasks") or []
+            before_run = (before_tasks[0].get("latest_run") or {}) if before_tasks else {}
             submit_re_params(page, args.temperature, args.duration, args.tube_count)
             after = wait_for_submission_state(args.base_url, args.session_id, timeout=120)
-            progress_questions = ask_progress_questions_if_running(page, args.base_url, args.session_id)
+            after_tasks = after.get("tasks") or []
+            after_run = (after_tasks[0].get("latest_run") or {}) if after_tasks else {}
+            is_new_run = (
+                bool(after_run.get("lab_server_id"))
+                and after_run.get("lab_server_id") != before_run.get("lab_server_id")
+            )
+            if is_new_run:
+                progress_questions, progress_questions_skipped = ask_progress_questions_if_running(page, args.base_url, args.session_id)
+            else:
+                progress_questions, progress_questions_skipped = [], "existing run already in session"
             result = {
                 "session_id": args.session_id,
                 "before": before,
                 "after": after,
                 "progress_questions": progress_questions,
+                "progress_questions_skipped": progress_questions_skipped,
             }
             if args.output:
                 Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

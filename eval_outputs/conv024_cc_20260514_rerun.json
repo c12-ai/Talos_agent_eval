@@ -1,0 +1,130 @@
+{
+  "title": "[20260514-cc-conv024-rerun]",
+  "session_id": "b7e75383-f712-4c96-b81c-b63708ea204e",
+  "base_url": "http://192.168.12.239:8080",
+  "slot_id": "bic_09B_l4_001",
+  "slot_label": "备料架L4层样品柱001位",
+  "tlc_image": "/Users/wuwenyan/Desktop/demo.jpeg",
+  "workflow_state": {
+    "plan": {
+      "id": "890a6b15-0184-4838-9b3a-711d5aacccc2",
+      "status": "confirmed",
+      "plan_draft": [
+        {
+          "title": "进行柱色谱分离（过柱）",
+          "executor": "cc_agent"
+        }
+      ]
+    },
+    "tasks": [
+      {
+        "id": "36b4ea4f-b0e2-4cd6-8d03-10a85aa565d5",
+        "task_type": "cc_agent",
+        "sequence": 1,
+        "phase": "conducting",
+        "spec": {
+          "solvents": [
+            "PE",
+            "EA"
+          ],
+          "rf_values": [
+            0.35
+          ],
+          "solvent_ratio": [
+            1,
+            1
+          ],
+          "tlc_image_url": "https://s3.cn-northwest-1.amazonaws.com.cn/aichemengine-release-bundles/4c353382-ecbd-4cd9-817e-ed2e9b90c16f-demo.jpeg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIAWJGRYB4NH47YNFGD%2F20260514%2Fcn-northwest-1%2Fs3%2Faws4_request&X-Amz-Date=20260514T080859Z&X-Amz-Expires=3600&X-Amz-Signature=c165c6398b93cbbd30afbf6773d14a6022ce29eeefaf8bfa5620e0f48dddfbc5&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+          "sample_amount_g": 0.1
+        },
+        "params": {
+          "column_type": "silica_12g",
+          "solvent_system": [
+            "PE",
+            "EA"
+          ],
+          "gradient_solvent": "EA",
+          "solvent_gradient": [
+            {
+              "duration_min": 0.0,
+              "gradient_pct": 0.0
+            },
+            {
+              "duration_min": 2.0,
+              "gradient_pct": 0.0
+            },
+            {
+              "duration_min": 20.0,
+              "gradient_pct": 100.0
+            },
+            {
+              "duration_min": 4.0,
+              "gradient_pct": 100.0
+            }
+          ]
+        },
+        "user_params": {
+          "column_type": "silica_12g",
+          "solvent_system": [
+            "PE",
+            "EA"
+          ],
+          "gradient_solvent": "EA",
+          "solvent_gradient": [
+            {
+              "duration_min": 0.0,
+              "gradient_pct": 0.0
+            },
+            {
+              "duration_min": 2.0,
+              "gradient_pct": 0.0
+            },
+            {
+              "duration_min": 20.0,
+              "gradient_pct": 100.0
+            },
+            {
+              "duration_min": 4.0,
+              "gradient_pct": 100.0
+            }
+          ]
+        },
+        "user_input": {
+          "sample_cartridge_location": "bic_09B_l4_001"
+        },
+        "latest_run": {
+          "lab_server_id": "fa30bcf4-e70d-4262-9fe0-aa27bc1566fd",
+          "status": "in_progress",
+          "attempt": 1,
+          "steps": {
+            "0": {
+              "status": "failed",
+              "skill_type": "setup_cc_bins",
+              "error_message": "Step 0 (setup_cc_bins) failed to submit: {'error': 'validation_failed', 'message': 'No idle robots available', 'field': None, 'details': {'errors': ['No idle robots available'], 'warnings': []}}"
+            },
+            "1": {
+              "status": "cancelled",
+              "skill_type": "setup_cartridges",
+              "error_message": null
+            },
+            "2": {
+              "status": "cancelled",
+              "skill_type": "setup_tube_rack",
+              "error_message": null
+            },
+            "3": {
+              "status": "cancelled",
+              "skill_type": "start_column_chromatography",
+              "error_message": null
+            }
+          }
+        }
+      }
+    ],
+    "current_task": 1
+  },
+  "progress_questions": [
+    "这个过柱任务跑到第几步了？"
+  ],
+  "progress_questions_skipped": null
+}

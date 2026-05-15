@@ -1,0 +1,114 @@
+{
+  "conv-001": {
+    "conv_id": "conv-001",
+    "error": "Locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\"textarea[placeholder*='TALOS'], textarea\").first\n    - locator resolved to <textarea rows=\"1\" placeholder=\"向 TALOS 发送消息...\" class=\"flex-1 border-0 outline-none resize-none bg-transparent\"></textarea>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <div class=\"fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]\">…</div> from <div class=\"panel-card\">…</div> subtree intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <div class=\"fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]\">…</div> from <div class=\"panel-card\">…</div> subtree intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    57 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <div class=\"fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px]\">…</div> from <div class=\"panel-card\">…</div> subtree intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n"
+  },
+  "conv-023": {
+    "conv_id": "conv-023",
+    "session_id": "a3c61baa-de18-42e4-9962-59706f08c1c7",
+    "category": "单过柱",
+    "turns": [
+      {
+        "user_idx": 1,
+        "user_text": "帮我过柱，化合物 SMILES O=C(OC)c1ccc(N)cc1，上样 200 mg，TLC Rf 0.5，PE:Et2O 5:1。我习惯用 Et2O 体系",
+        "expected_tool": null,
+        "was_chat_message": true,
+        "panel_action": "approve_plan"
+      },
+      {
+        "user_idx": 3,
+        "user_text": "对",
+        "expected_tool": null,
+        "was_chat_message": true,
+        "panel_action": "confirm_cc_spec"
+      },
+      {
+        "user_idx": 5,
+        "user_text": "准确",
+        "expected_tool": null,
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 7,
+        "user_text": "起点 15% 是不是偏高？TLC 才用 17% Et2O",
+        "expected_tool": null,
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 9,
+        "user_text": "那就 10%，下发",
+        "expected_tool": null,
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 11,
+        "user_text": "机器人状态？",
+        "expected_tool": "get_robot_status",
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 13,
+        "user_text": "跑到哪了？",
+        "expected_tool": "get_task_status",
+        "was_chat_message": true
+      }
+    ],
+    "plan_approved": true,
+    "spec_confirmed": true,
+    "task_submitted": false
+  },
+  "conv-024": {
+    "conv_id": "conv-024",
+    "session_id": "d326579c-c446-42cb-815a-8174b86456af",
+    "category": "单过柱",
+    "turns": [
+      {
+        "user_idx": 1,
+        "user_text": "帮我过柱，化合物 SMILES OC1=CC=C(O)C(O)=C1，上样 100 mg，TLC Rf 0.3，PE:EA 1:1。这化合物极易氧化变色",
+        "expected_tool": null,
+        "was_chat_message": true,
+        "panel_action": "approve_plan"
+      },
+      {
+        "user_idx": 3,
+        "user_text": "对",
+        "expected_tool": null,
+        "was_chat_message": true,
+        "panel_action": "confirm_cc_spec"
+      },
+      {
+        "user_idx": 5,
+        "user_text": "准确",
+        "expected_tool": null,
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 7,
+        "user_text": "过柱后是不是要立刻处理？",
+        "expected_tool": null,
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 9,
+        "user_text": "好，下发",
+        "expected_tool": null,
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 11,
+        "user_text": "现在到哪了？",
+        "expected_tool": "get_task_status",
+        "was_chat_message": true
+      },
+      {
+        "user_idx": 13,
+        "user_text": "机器人状态？",
+        "expected_tool": "get_robot_status",
+        "was_chat_message": true
+      }
+    ],
+    "plan_approved": true,
+    "spec_confirmed": true,
+    "task_submitted": false
+  }
+}

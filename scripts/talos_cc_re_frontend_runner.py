@@ -148,6 +148,11 @@ def find_task(state: dict, task_type: str) -> tuple[int, dict] | tuple[None, Non
     return None, None
 
 
+def task_is_terminal(task: dict | None) -> bool:
+    run = (task or {}).get("latest_run") or {}
+    return run.get("status") in {"completed", "failed", "cancelled", "discarded", "timeout"}
+
+
 def run_one(args: argparse.Namespace, title: str, cc_prompt: str, re_prompt: str) -> dict:
     executable = args.browser_executable
     if executable == "auto":
@@ -189,12 +194,17 @@ def run_one(args: argparse.Namespace, title: str, cc_prompt: str, re_prompt: str
             cc_submitted_state = get_workflow_state(args.base_url, session_id)
             result["cc"]["submitted_state"] = cc_submitted_state
 
-            try:
-                send_chat_message(page, "机器人现在在干嘛？")
-                wait_for_agent(page)
-                result["queries"].append({"during": "cc", "user": "机器人现在在干嘛？", "body_tail": body_text(page)[-2500:]})
-            except Exception as exc:
-                result["errors"].append(f"cc_progress_query_failed: {exc}")
+            current_state = get_workflow_state(args.base_url, session_id)
+            _, current_cc_task = find_task(current_state, "cc_agent")
+            if not task_is_terminal(current_cc_task):
+                try:
+                    send_chat_message(page, "机器人现在在干嘛？")
+                    wait_for_agent(page)
+                    result["queries"].append({"during": "cc", "user": "机器人现在在干嘛？", "body_tail": body_text(page)[-2500:]})
+                except Exception as exc:
+                    result["errors"].append(f"cc_progress_query_failed: {exc}")
+            else:
+                result["cc"]["progress_questions_skipped"] = "task already terminal"
 
             state = wait_for_task_terminal(args.base_url, session_id, 0, timeout=args.cc_timeout)
             result["cc"]["terminal_state"] = state
@@ -233,14 +243,17 @@ def run_one(args: argparse.Namespace, title: str, cc_prompt: str, re_prompt: str
                 submit_re_params(page, args.temperature, args.duration, args.tube_count)
                 re_submit_state = get_workflow_state(args.base_url, session_id)
                 result["re"]["submitted_state"] = re_submit_state
-                re_index, _ = find_task(re_submit_state, "re_agent")
+                re_index, re_task = find_task(re_submit_state, "re_agent")
                 if re_index is not None:
-                    try:
-                        send_chat_message(page, "这个旋蒸任务跑到第几步了？")
-                        wait_for_agent(page)
-                        result["queries"].append({"during": "re", "user": "这个旋蒸任务跑到第几步了？", "body_tail": body_text(page)[-2500:]})
-                    except Exception as exc:
-                        result["errors"].append(f"re_progress_query_failed: {exc}")
+                    if not task_is_terminal(re_task):
+                        try:
+                            send_chat_message(page, "这个旋蒸任务跑到第几步了？")
+                            wait_for_agent(page)
+                            result["queries"].append({"during": "re", "user": "这个旋蒸任务跑到第几步了？", "body_tail": body_text(page)[-2500:]})
+                        except Exception as exc:
+                            result["errors"].append(f"re_progress_query_failed: {exc}")
+                    else:
+                        result["re"]["progress_questions_skipped"] = "task already terminal"
                     result["re"]["terminal_state"] = wait_for_task_terminal(args.base_url, session_id, re_index, timeout=args.re_timeout)
             except Exception as exc:
                 result["errors"].append(f"re_flow_failed: {exc}")

@@ -286,11 +286,16 @@ def run_conv(conv_id: str, browser):
                 time.sleep(15)
                 waited += 15
                 try:
-                    body = page.text_content("body") or ""
-                    if any(kw in body for kw in ["完成", "已完成", "回收率", "旋蒸完成", "管路清洗"]):
-                        print(f"  [Lab] Done after {waited}s")
-                        break
-                except:
+                    from talos_cc_frontend_runner import get_workflow_state
+                    state = get_workflow_state("http://192.168.12.239:8080", session_id)
+                    tasks = state.get("tasks") or []
+                    if tasks:
+                        run = tasks[0].get("latest_run") or {}
+                        status = run.get("status", "")
+                        if status in ("completed", "failed", "cancelled", "discarded", "timeout"):
+                            print(f"  [Lab] Done after {waited}s, status={status}")
+                            break
+                except Exception:
                     pass
                 if waited % 60 == 0:
                     print(f"  [Lab] Still waiting... ({waited}s)")

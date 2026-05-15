@@ -1,0 +1,14 @@
+{
+  "conv-001": {
+    "conv_id": "conv-001",
+    "error": "timed out waiting for visible text button ['新对话', 'New Chat']"
+  },
+  "conv-023": {
+    "conv_id": "conv-023",
+    "error": "timed out waiting for visible text button ['新对话', 'New Chat']"
+  },
+  "conv-024": {
+    "conv_id": "conv-024",
+    "error": "timed out waiting for visible text button ['新对话', 'New Chat']"
+  }
+}

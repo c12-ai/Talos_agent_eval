@@ -98,8 +98,10 @@ def body_text(page: Page) -> str:
 
 
 def click_first_visible_text(page: Page, texts: Iterable[str], timeout: float = 20) -> str | None:
+    text_list = list(texts)
+
     def find_and_click():
-        for text in texts:
+        for text in text_list:
             candidates = [
                 page.get_by_role("button", name=text).first,
                 page.get_by_text(text, exact=True).first,
@@ -114,7 +116,31 @@ def click_first_visible_text(page: Page, texts: Iterable[str], timeout: float = 
                     continue
         return None
 
-    clicked = wait_until(find_and_click, timeout=timeout, description=f"visible text button {list(texts)}")
+    try:
+        clicked = wait_until(find_and_click, timeout=timeout, description=f"visible text button {text_list}")
+    except TimeoutError:
+        clicked = page.evaluate(
+            """texts => {
+                const visible = el => {
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+                };
+                for (const text of texts) {
+                    const btn = Array.from(document.querySelectorAll('button')).find(el =>
+                        visible(el) && !el.disabled && (el.innerText || '').trim() === text
+                    );
+                    if (btn) {
+                        btn.click();
+                        return text;
+                    }
+                }
+                return null;
+            }""",
+            text_list,
+        )
+        if not clicked:
+            raise
     log(f"  clicked: {clicked}")
     sleep(1)
     return clicked
@@ -549,27 +575,26 @@ def _wait_for_lab_completion(page: Page, base_url: str, session_id: str, timeout
     deadline = time.time() + timeout
     while time.time() < deadline:
         sleep(15)
-        # Check page body
-        try:
-            body = body_text(page)
-            if any(kw in body for kw in ["完成", "已完成", "回收率", "旋蒸完成", "管路清洗"]):
-                log(f"  [Lab] Done! elapsed={time.time() - (deadline - timeout):.0f}s")
-                return
-        except Exception:
-            pass
-        # Check workflow state
         state = get_workflow_state(base_url, session_id)
         if state:
             tasks = state.get("tasks") or []
             if tasks:
                 run = tasks[0].get("latest_run") or {}
                 status = run.get("status", "")
-                if status in ("completed", "failed", "cancelled"):
+                if status in ("completed", "failed", "cancelled", "discarded", "timeout"):
                     log(f"  [Lab] Done! status={status}")
                     return
         elapsed = time.time() - (deadline - timeout)
         if elapsed % 60 < 15:
             log(f"  [Lab] still waiting... ({elapsed:.0f}s)")
+            try:
+                body = body_text(page)
+                for kw in ["完成", "已完成", "回收率", "旋蒸完成", "管路清洗"]:
+                    if kw in body:
+                        log(f"  [Lab] debug only: saw body keyword {kw!r} while waiting for run status")
+                        break
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
