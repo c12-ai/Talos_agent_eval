@@ -1,0 +1,55 @@
+{
+  "conv-018": {
+    "conv_id": "conv-018",
+    "category": "负例",
+    "category_raw": "negative",
+    "session_id": "d49c936a-9250-4748-98c9-0baeafb251b7",
+    "title": "[20260518-0248-conv-018]",
+    "started_utc": "2026-05-18T02:48:24.342052+00:00",
+    "ended_utc": "2026-05-18T02:49:13.771235+00:00",
+    "plan_approved": false,
+    "spec_confirmed": false,
+    "task_submitted": false,
+    "turns": [
+      {
+        "user_idx": 0,
+        "user_text": "帮我泡杯咖啡",
+        "expected_tool": null,
+        "expect_plan": false,
+        "expect_dispatch": null,
+        "panel_action": null
+      },
+      {
+        "user_idx": 2,
+        "user_text": "没有，就问问",
+        "expected_tool": null,
+        "expect_plan": false,
+        "expect_dispatch": null,
+        "panel_action": null
+      }
+    ],
+    "workflow_state": {
+      "plan": null,
+      "tasks": [],
+      "current_task": 0
+    },
+    "phoenix_spans": [
+      {
+        "span_id": "dd10bcf33dec89ac",
+        "trace_id": "a307c0e634ccd686802889674311f10a",
+        "start_time": "2026-05-18T02:48:30.933299+00:00",
+        "input": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"帮我泡杯咖啡\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"52fdc1c4-5cfb-4f0a-b759-c7fc6cbe13a2\"}}], \"tools\": [], \"copilotkit\": {\"actions\": [], \"context\": []}}",
+        "output": "{\"user_feedback\": null, \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"turn_index\": 0, \"tracing_steps\": [{\"id\": \"f3a629b4-ca8d-5c56-b398-5c90edcc986c\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"intention_detection\", \"message\": \"意图识别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:30.940011+08:00\", \"turn_index\": 0}, {\"id\": \"17a310e7-3d66-5fd7-934d-bc9c314f6beb\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"user_admittance\", \"message\": \"准入判别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:30.940286+08:00\", \"turn_index\": 0}, {\"id\": \"7aef1e3f-9b90-51b9-bb39-644f50d76b2d\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"stage_dispatcher\", \"message\": \"已经根据您的请求, 分配到对应领域模型(Rejected)进行处理\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:46.887964+08:00\", \"turn_index\": 0}], \"turn_titles\": {\"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\": \"请求已拒绝\"}, \"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"帮我泡杯咖啡\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"52fdc1c4-5cfb-4f0a-b759-c7fc6cbe13a2\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"抱歉，我是 Talos，您的实验室自动化助手，仅能为您处理化学实验调度和仪器配置相关的任务。\", \"additio",
+        "actual_tools": []
+      },
+      {
+        "span_id": "1d8f8cf2e9e5ffd0",
+        "trace_id": "de4878021ef55de5df6c31da36a8ef3c",
+        "start_time": "2026-05-18T02:48:50.641096+00:00",
+        "input": "{\"user_feedback\": null, \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"turn_index\": 0, \"tracing_steps\": [{\"id\": \"f3a629b4-ca8d-5c56-b398-5c90edcc986c\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"intention_detection\", \"message\": \"意图识别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:30.940011+08:00\", \"turn_index\": 0}, {\"id\": \"17a310e7-3d66-5fd7-934d-bc9c314f6beb\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"user_admittance\", \"message\": \"准入判别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:30.940286+08:00\", \"turn_index\": 0}, {\"id\": \"7aef1e",
+        "output": "{\"user_feedback\": null, \"turn_id\": \"7ba0cc2f-6cfe-4fd5-b7ed-4c2f7b60e070\", \"turn_index\": 1, \"tracing_steps\": [{\"id\": \"f3a629b4-ca8d-5c56-b398-5c90edcc986c\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"intention_detection\", \"message\": \"意图识别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:30.940011+08:00\", \"turn_index\": 0}, {\"id\": \"17a310e7-3d66-5fd7-934d-bc9c314f6beb\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"user_admittance\", \"message\": \"准入判别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:30.940286+08:00\", \"turn_index\": 0}, {\"id\": \"7aef1e3f-9b90-51b9-bb39-644f50d76b2d\", \"turn_id\": \"3e23a6d0-f503-4d9c-aa25-cf138a5d2c89\", \"node\": \"stage_dispatcher\", \"message\": \"已经根据您的请求, 分配到对应领域模型(Rejected)进行处理\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:46.887964+08:00\", \"turn_index\": 0}, {\"id\": \"ec654b50-58f7-531d-a0aa-15c5e4bfcf29\", \"turn_id\": \"7ba0cc2f-6cfe-4fd5-b7ed-4c2f7b60e070\", \"node\": \"intention_detection\", \"message\": \"意图识别完成\", \"status\": \"completed\", \"timestamp\": \"2026-05-18T10:48:50.651789+08:00\", \"turn_index\": 1}, {\"id\": \"ceec9b6a-dd42-511e-af1b-2237dfee6ab7\", \"turn_id\": \"7ba0cc2f-6cfe-4fd5-b7ed-4c2f7b60e070\", \"node\": \"use",
+        "actual_tools": []
+      }
+    ]
+  }
+}

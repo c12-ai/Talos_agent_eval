@@ -77,24 +77,107 @@ def _click_confirm_any(page) -> bool:
 # Slot management (CC)
 # ---------------------------------------------------------------------------
 
-def _ensure_slot_installed(page, slot_label: str = "备料架L4层样品柱002位") -> bool:
-    """Idempotent: install cartridge in the specified slot if not already installed."""
-    slot = page.get_by_text(slot_label, exact=False).first
+def _slot_installed(slot) -> bool:
+    """True if the slot <button> shows installed state.
+
+    Real DOM (captured 2026-05-18): an installed slot button carries
+    `border-emerald-400 bg-emerald-50`; an empty slot carries
+    `border-slate-200 bg-slate-50 border-dashed`. The marker is on the
+    <button> itself (slot text is a <span> child), so scan a few ancestors.
+    """
     try:
-        slot.wait_for(state="visible", timeout=10000)
+        return bool(slot.evaluate(
+            """el => { let n=el;
+                for (let i=0;i<5 && n;i++){
+                  const c=((n.className||'')+'');
+                  if (/border-emerald|bg-emerald/.test(c)) return true;
+                  n=n.parentElement; }
+                return false; }"""
+        ))
     except Exception:
-        print(f"[UI] Slot '{slot_label}' not found")
         return False
 
-    class_name = slot.evaluate("el => el.className || ''")
-    if "border-emerald" in class_name or "bg-emerald-50" in class_name:
-        print(f"[UI] Slot '{slot_label}' already installed, skipping")
+
+def _close_slot_dialog(page) -> str:
+    """Close the slot dialog correctly. `保存` is DISABLED (class
+    `cursor-not-allowed`, no `disabled` attr) when no slot change was made,
+    so clicking it blindly hangs. Click `保存` only when enabled, else `取消`.
+    """
+    try:
+        save = page.locator("div.fixed.inset-0 button:has-text('保存')").first
+        if save.count() and save.is_visible(timeout=800):
+            cls = (save.get_attribute("class") or "")
+            if "cursor-not-allowed" not in cls and "text-slate-400" not in cls:
+                save.click(timeout=4000)
+                print("[UI] slot dialog: 保存 (enabled)")
+                time.sleep(1)
+                return "saved"
+    except Exception as e:
+        print(f"[UI] 保存 check failed: {e}")
+    for txt in ["取消"]:
+        try:
+            b = page.locator(f"div.fixed.inset-0 button:has-text('{txt}')").first
+            if b.count() and b.is_visible(timeout=800):
+                b.click(timeout=4000)
+                print(f"[UI] slot dialog: {txt} (no change, save disabled)")
+                time.sleep(1)
+                return "cancelled"
+        except Exception:
+            continue
+    try:
+        page.keyboard.press("Escape")
+        time.sleep(0.5)
+    except Exception:
+        pass
+    return "escaped"
+
+
+def _dump_slot_dialog(page):
+    try:
+        anchor = page.get_by_text("管理样品柱插槽", exact=False).first
+        html = anchor.evaluate(
+            """el => { let n=el;
+                for (let i=0;i<8 && n;i++){
+                  if (/dialog|modal|panel|fixed|inset-0/i.test((n.className||'')+'')) return n.outerHTML;
+                  n=n.parentElement; }
+                return (el.closest('div')||el).outerHTML; }"""
+        )
+        Path("/tmp/slot_dialog_dom.html").write_text(html or "")
+        print(f"[UI] dumped slot dialog DOM ({len(html or '')} chars) -> /tmp/slot_dialog_dom.html")
+    except Exception as e:
+        print(f"[UI] slot dialog DOM dump failed: {e}")
+
+
+def _ensure_slot_installed(page, slot_label: str = "备料架L4层样品柱002位") -> bool:
+    """Idempotent + toggle-safe: never re-click an already-installed slot
+    (guide §4.2 — re-click can UNINSTALL it). Verify the click actually
+    flipped state before declaring success."""
+    _dump_slot_dialog(page)  # keep DOM snapshot for diagnostics
+    # The slot is a real <button> (text is a <span> child). Target the button.
+    slot = page.locator("div.fixed.inset-0 button", has_text=slot_label).first
+    try:
+        slot.wait_for(state="visible", timeout=12000)
+    except Exception:
+        print(f"[UI] Slot button '{slot_label}' not found in dialog")
+        return False
+
+    if _slot_installed(slot):
+        # Clicking toggles install<->remove (dialog subtitle: 点击插槽切换安装/移除).
+        # Already installed + persisted in lab backend -> DO NOT click.
+        print(f"[UI] Slot '{slot_label}' already installed (emerald) -> no click (toggle-safe)")
         return True
 
-    print(f"[UI] Installing cartridge in '{slot_label}'")
-    slot.click()
-    time.sleep(1)
-    return True
+    print(f"[UI] Slot '{slot_label}' empty -> clicking to install once")
+    try:
+        slot.scroll_into_view_if_needed(timeout=3000)
+        slot.click(timeout=8000)
+        time.sleep(1.2)
+    except Exception as e:
+        print(f"[UI] slot install click failed: {e}")
+        return False
+    ok = _slot_installed(slot)
+    print(f"[UI] slot '{slot_label}' install {'confirmed' if ok else 'NOT confirmed'}")
+    return ok
 
 
 def _select_cartridge(page, slot_id: str = "bic_09B_l4_002") -> bool:
@@ -151,46 +234,81 @@ def _select_cartridge(page, slot_id: str = "bic_09B_l4_002") -> bool:
     return False
 
 
-def _set_column_type_12g(page) -> None:
-    """Force silica column spec to 12g."""
-    text = _body_text(page)
-    if "12g" in text and "硅胶柱规格" in text:
-        try:
-            page.get_by_text("12g", exact=True).first.click(timeout=1000)
-        except Exception:
-            pass
-        return
+def _set_column_type_12g(page) -> bool:
+    """Force silica column spec to 12g (guide §4.3 — lab only has silica_12g).
 
-    # Try native select
+    Must operate the ACTUAL 硅胶柱规格 control. The previous heuristic returned
+    early whenever '12g' appeared anywhere on the page (it shows up in the
+    agent's inventory chat), so the 24g recommendation reached the lab and
+    failed with "No unused silica cartridge available for spec 'silica_24g'".
+    """
+    # Strategy A: any native <select> exposing a 12g option.
     try:
-        sel = page.locator("select").first
-        if sel.count() and sel.is_visible(timeout=500):
-            options = sel.locator("option").evaluate_all(
-                """opts => opts.map(o => ({value: o.value, text: o.textContent || ''}))"""
+        sels = page.locator("select")
+        for i in range(sels.count()):
+            sel = sels.nth(i)
+            if not sel.is_visible(timeout=300):
+                continue
+            opts = sel.locator("option").evaluate_all(
+                "os => os.map(o => ({v:o.value, t:(o.textContent||'')}))"
             )
-            for opt in options:
-                if "12g" in opt["text"] or "silica_12g" in opt["value"]:
-                    sel.select_option(opt["value"])
-                    print("[UI] Set column type 12g via select")
-                    time.sleep(1)
-                    return
+            for o in opts:
+                if "12g" in o["t"] or "silica_12g" in o["v"]:
+                    sel.select_option(o["v"])
+                    time.sleep(0.8)
+                    print("[UI] column spec -> 12g (native select)")
+                    return True
     except Exception:
         pass
 
-    # Try button/popover
-    for selector in ["button:has-text('24g')", "button:has-text('40g')", "button:has-text('硅胶柱规格')"]:
+    # Strategy B: scoped to the 硅胶柱规格 control container — open its trigger
+    # (showing current 24g/40g) then click the 12g option inside the popover.
+    try:
+        lab = page.locator(
+            "xpath=//*[contains(normalize-space(.),'硅胶柱规格')][not(.//*[contains(text(),'硅胶柱规格')])]"
+        ).first
+        if lab.count():
+            container = lab.locator("xpath=ancestor::*[self::div or self::section][1]")
+            for trig in ["24g", "40g", "请选择", "硅胶柱规格"]:
+                try:
+                    t = container.locator(
+                        f"button:has-text('{trig}'), [role='combobox']:has-text('{trig}')"
+                    ).first
+                    if t.count() and t.is_visible(timeout=400):
+                        t.click()
+                        time.sleep(0.5)
+                        break
+                except Exception:
+                    continue
+            for opt_sel in ["[role='option']", "li", "button", "[role='menuitem']", "div"]:
+                try:
+                    o = page.locator(f"{opt_sel}").filter(has_text="12g").first
+                    if o.count() and o.is_visible(timeout=400):
+                        o.click(timeout=2000)
+                        time.sleep(0.8)
+                        print(f"[UI] column spec -> 12g (scoped popover {opt_sel})")
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # Strategy C: a typed control (button/option/radio/label) whose text is 12g
+    # — explicitly NOT plain chat text.
+    for sel in ["button:has-text('12g')", "[role='option']:has-text('12g')",
+                "[role='radio']:has-text('12g')", "label:has-text('12g')"]:
         try:
-            el = page.locator(selector).first
-            if el.count() and el.is_visible(timeout=500):
-                el.click()
-                time.sleep(0.5)
-                page.get_by_text("12g", exact=True).first.click(timeout=2000)
-                print("[UI] Set column type 12g via popover")
-                time.sleep(1)
-                return
+            el = page.locator(sel).first
+            if el.count() and el.is_visible(timeout=400):
+                el.click(timeout=2000)
+                time.sleep(0.6)
+                print(f"[UI] column spec -> 12g ({sel})")
+                return True
         except Exception:
             continue
-    print("[UI] Warning: could not explicitly set 12g")
+
+    print("[UI] WARNING: could NOT enforce 12g column spec (run will likely fail)")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -209,16 +327,21 @@ def submit_cc_via_ui(page, slot_label: str = "备料架L4层样品柱002位", sl
     print("[UI] submit_cc_via_ui: starting...")
     _set_column_type_12g(page)
 
-    # Open slot management
-    _click_first_visible_text(page, ["管理插槽"], timeout=30)
-    _wait_until(lambda: "管理样品柱插槽" in _body_text(page), timeout=10, description="slot management dialog")
+    # Open slot management (real DOM: <button>管理插槽</button>, blue-bordered)
+    try:
+        page.get_by_role("button", name="管理插槽").first.click(timeout=20000)
+    except Exception:
+        _click_first_visible_text(page, ["管理插槽"], timeout=15)
+    _wait_until(lambda: "管理样品柱插槽" in _body_text(page), timeout=12,
+                description="slot management dialog")
 
     _ensure_slot_installed(page, slot_label)
-    _click_first_visible_text(page, ["保存"], timeout=10)
+    # `保存` is disabled when no change was made -> close correctly, never hang.
+    _close_slot_dialog(page)
 
     _select_cartridge(page, slot_id)
 
-    _set_column_type_12g(page)
+    _set_column_type_12g(page)  # defensive re-assert (guide §4.3)
     ok = _click_confirm_any(page)
     print(f"[UI] submit_cc_via_ui: done, confirm clicked={ok}")
     return ok
