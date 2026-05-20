@@ -345,11 +345,31 @@ def run_conv(brief, browser, args):
         elif (stage == "cc_spec" and params_given
               and any(x in bt for x in ["点击打开识别面板", "过柱参数预填", "重新识别"])):
             from talos_panel_ui import confirm_cc_spec_via_ui
-            confirm_cc_spec_via_ui(page, tlc_image=TLC_IMAGE, rf_value=args.rf)
-            rec["panel_action"] = "confirm_cc_spec"; stage = "cc_submit"
+            ok = confirm_cc_spec_via_ui(page, tlc_image=TLC_IMAGE, rf_value=args.rf,
+                                        base_url=TALOS_BASE, session_id=session_id)
+            if ok:
+                rec["panel_action"] = "confirm_cc_spec"; stage = "cc_submit"
+            else:
+                rec["panel_action"] = "confirm_cc_spec_TIMEOUT"
+                log("  [panel] CC spec confirm did not advance cc_agent — staying at cc_spec")
 
-        elif stage == "cc_submit" and dispatch_intent(ut) and any(x in bt for x in ["管理插槽", "硅胶柱规格"]):
-            if not args.allow_dispatch:
+        elif stage == "cc_submit" and dispatch_intent(ut):
+            # Wait for the CC params panel to be ready before submitting. Use
+            # API state as the authoritative ready signal (cc_agent.phase ==
+            # 'collecting_params'). Body text alone is unreliable: the panel
+            # may take 10-30s to render after spec confirm, and a snapshot at
+            # "可以" time can miss it on slower hosts.
+            cc_ready = False
+            cc_deadline = time.time() + 60
+            while time.time() < cc_deadline:
+                if _cc_task_phase(session_id) == "collecting_params":
+                    cc_ready = True
+                    break
+                time.sleep(3)
+            if not cc_ready:
+                rec["panel_action"] = "submit_cc_SKIPPED_not_ready"
+                log("  [panel] cc_agent never reached collecting_params — CC submit skipped")
+            elif not args.allow_dispatch:
                 rec["panel_action"] = "submit_cc_SKIPPED_gated"; dispatch_gated = True; stage = "blocked"
                 log("  [panel] CC submit gated (no --allow-dispatch)")
             else:
@@ -533,6 +553,15 @@ def _re_task_phase(session_id):
         if "re" in (t.get("task_type") or ""):
             return t.get("phase"), (t.get("latest_run") or {}).get("status")
     return None, None
+
+
+def _cc_task_phase(session_id):
+    """Return cc_agent phase string ('collecting_spec' / 'collecting_params' /
+    'conducting' / 'done'), or None if task absent."""
+    for t in (api_workflow_state(session_id).get("tasks") or []):
+        if "cc" in (t.get("task_type") or ""):
+            return t.get("phase")
+    return None
 
 
 def _compose_re_nudge(brief):

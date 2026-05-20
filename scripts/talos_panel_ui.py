@@ -351,61 +351,58 @@ def submit_cc_via_ui(page, slot_label: str = "备料架L4层样品柱002位", sl
 # CC TLC spec confirmation
 # ---------------------------------------------------------------------------
 
-def confirm_cc_spec_via_ui(page, tlc_image: str = "/Users/wuwenyan/Desktop/demo.jpeg", rf_value: str = "0.35") -> bool:
+def confirm_cc_spec_via_ui(page, tlc_image: str = "/Users/wuwenyan/Desktop/demo.jpeg",
+                           rf_value: str = "0.35",
+                           base_url: str = "", session_id: str = "") -> bool:
+    """Confirm CC spec panel; backend must advance cc_agent.phase from
+    `collecting_spec` to `collecting_params`.
+
+    Stable implementation: delegates to talos_cc_frontend_runner's
+    `upload_tlc_and_confirm_spec`, which uses **scoped selectors** (modal-
+    confined TLC dialog confirm + active step-card 确认修改 button) instead
+    of the page-level `_click_confirm_any`. The old approach silently
+    clicked stale/wrong 确认 buttons, leaving backend at `collecting_spec`
+    and downstream CC submit gates never firing.
+
+    When base_url/session_id are provided, additionally polls workflow-
+    state to verify cc_agent advanced; on miss, retries the scoped confirm
+    once.
     """
-    Confirm CC spec via UI:
-    1. Click '点击打开识别面板'
-    2. Upload TLC image
-    3. Set Rf value
-    4. Confirm TLC dialog
-    5. Confirm spec panel
-    """
-    print("[UI] confirm_cc_spec_via_ui: starting...")
+    from talos_cc_frontend_runner import upload_tlc_and_confirm_spec, get_workflow_state
+    print(f"[UI] confirm_cc_spec_via_ui: tlc={tlc_image} rf={rf_value} session={session_id or '(no-verify)'}")
+    try:
+        upload_tlc_and_confirm_spec(page, tlc_image, rf_value)
+    except Exception as exc:
+        print(f"[UI] confirm_cc_spec_via_ui: upload_tlc_and_confirm_spec ERROR — {exc}")
+        return False
 
-    if "点击打开识别面板" in _body_text(page):
-        _click_first_visible_text(page, ["点击打开识别面板"], timeout=10)
+    if not (base_url and session_id):
+        # Caller did not supply session info; rely on baseline's own waits.
+        print("[UI] confirm_cc_spec_via_ui: done (no API verify)")
+        return True
 
-    # Upload TLC image
-    image_path = Path(tlc_image).expanduser()
-    if image_path.exists():
-        file_input = page.locator("input[type='file']").first
-        try:
-            file_input.set_input_files(str(image_path))
-            time.sleep(2)
-            print(f"[UI] Uploaded TLC image: {image_path}")
-        except Exception as e:
-            print(f"[UI] TLC upload error: {e}")
-
-    # Fill Rf value
-    if rf_value:
-        candidates = page.locator("input")
-        try:
-            for i in range(candidates.count()):
-                field = candidates.nth(i)
-                try:
-                    if not field.is_visible(timeout=300):
-                        continue
-                    val = field.input_value(timeout=300) or ""
-                    placeholder = field.get_attribute("placeholder") or ""
-                    aria = field.get_attribute("aria-label") or ""
-                    combined = " ".join([val, placeholder, aria]).lower()
-                    if "rf" in combined or val in {"", "0", "0.0", "0.35"}:
-                        field.fill(str(rf_value))
-                        print(f"[UI] Filled Rf: {rf_value}")
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-    # Double confirm (TLC dialog + spec panel)
-    _click_confirm_any(page)
-    time.sleep(0.5)
-    if any(t in _body_text(page) for t in ["确认", "确认修改"]):
-        _click_confirm_any(page)
-
-    print("[UI] confirm_cc_spec_via_ui: done")
-    return True
+    # Verify backend actually advanced. Retry the scoped confirm once if not.
+    from talos_cc_frontend_runner import click_cc_spec_confirm
+    deadline = time.time() + 120
+    retried = False
+    while time.time() < deadline:
+        st = get_workflow_state(base_url, session_id)
+        for t in (st.get("tasks") or []):
+            if "cc" in (t.get("task_type") or ""):
+                if t.get("phase") in ("collecting_params", "conducting", "done"):
+                    print(f"[UI] confirm_cc_spec_via_ui: OK (cc_agent.phase={t.get('phase')})")
+                    return True
+                break
+        if not retried and time.time() - (deadline - 120) > 20:
+            try:
+                click_cc_spec_confirm(page)
+                print("[UI] confirm_cc_spec_via_ui: retried scoped confirm once")
+                retried = True
+            except Exception as exc:
+                print(f"[UI] confirm_cc_spec_via_ui: retry click failed — {exc}")
+        time.sleep(3)
+    print("[UI] confirm_cc_spec_via_ui: TIMEOUT — cc_agent stayed at collecting_spec")
+    return False
 
 
 # ---------------------------------------------------------------------------
