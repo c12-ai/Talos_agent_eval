@@ -558,11 +558,38 @@ def submit_re_params_via_ui(page, temperature_c: str = "35",
     is the proven sequence used in standalone RE runs.
 
     Precondition: backend at collecting_params (i.e. confirm_re_spec_via_ui
-    has succeeded). The function will wait briefly for the params panel
-    keywords to render before acting.
+    has succeeded).
+
+    Why the pre-ensure step: baseline's add_flask_and_paint_tubes uses
+    `is_visible(timeout=3000)` on the `+ 添加茄形瓶` button, which on
+    slower hosts misses the button's first render window. If the click is
+    skipped, the subsequent 20s wait for `瓶 1` times out. We pre-wait up
+    to 60s for the add button, click it ourselves, then verify `瓶 1`
+    actually rendered before delegating — baseline picks up from there.
     """
     from talos_re_frontend_runner import submit_re_params as _api_submit_re
     print(f"[UI] submit_re_params_via_ui: t={temperature_c}°C dur={duration_min}min tubes=1-{tube_count}")
+
+    # Pre-ensure: wait for + 添加茄形瓶 to render, then click it ourselves.
+    try:
+        add_btn = page.locator("button:has-text('+ 添加茄形瓶')").first
+        add_btn.wait_for(state="visible", timeout=60000)
+        # Re-check 瓶 1 may already exist (flask added by previous attempt);
+        # only click add if there's no 瓶 1 yet.
+        bottle = page.get_by_text("瓶 1", exact=True).first
+        if bottle.count() == 0 or not bottle.is_visible(timeout=500):
+            add_btn.click()
+            print("[UI] submit_re_params_via_ui: clicked '+ 添加茄形瓶'")
+            time.sleep(1.5)
+        else:
+            print("[UI] submit_re_params_via_ui: '瓶 1' already exists, skipping add click")
+        # Verify 瓶 1 rendered before delegating to baseline.
+        page.get_by_text("瓶 1", exact=True).first.wait_for(state="visible", timeout=20000)
+        print("[UI] submit_re_params_via_ui: '瓶 1' visible — delegating to baseline")
+    except Exception as exc:
+        print(f"[UI] submit_re_params_via_ui: pre-ensure ERROR — {exc}")
+        return False
+
     try:
         _api_submit_re(page, temperature_c, duration_min, tube_count)
         print("[UI] submit_re_params_via_ui: OK (confirm clicked)")
