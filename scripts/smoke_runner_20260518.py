@@ -146,6 +146,31 @@ def wait_textarea_enabled(page, timeout=120):
     return False
 
 
+def wait_chat_send_ready(page, timeout=180):
+    """Wait until BOTH the textarea is enabled AND `.chat-send-btn` is not
+    disabled. The send button's disabled state is the front-end's signal of
+    'agent busy generating' — when it's off, Enter goes to a no-op handler
+    and our chat is silently swallowed. Returns True when both are ready."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            state = page.evaluate("""() => {
+                const ta = document.querySelector('textarea');
+                if (!ta) return {ta: false, btn: false};
+                const btn = document.querySelector('.chat-send-btn');
+                return {
+                    ta: !ta.disabled,
+                    btn: btn ? !btn.disabled : true,
+                };
+            }""")
+            if state.get("ta") and state.get("btn"):
+                return True
+        except Exception:
+            return True
+        time.sleep(1)
+    return False
+
+
 OVERLAY_SEL = "div.fixed.inset-0.z-50, div[class*='fixed'][class*='inset-0'][class*='z-50']"
 
 
@@ -183,22 +208,51 @@ def _dismiss_modal(page, tries: int = 6) -> bool:
     return not still
 
 
-def send_chat(page, text):
-    wait_textarea_enabled(page)
-    if _overlay_visible(page):
-        log("  [modal] overlay before chat send -> dismissing")
-        _dismiss_modal(page)
-    ta = page.locator("textarea[placeholder*='TALOS'], textarea").first
-    ta.wait_for(state="visible", timeout=10000)
-    try:
-        ta.click(timeout=8000)
-    except Exception:
-        _dismiss_modal(page)
-        ta.click(timeout=8000)
-    time.sleep(0.2)
-    ta.fill(text); time.sleep(0.3)
-    ta.press("Enter"); time.sleep(2)
-    log(f"  [chat>] {text[:90]}")
+def send_chat(page, text, max_retries=3):
+    """Fill the chat textarea and press Enter, verifying the message was
+    actually submitted (textarea cleared).
+
+    Why the verification matters: when `.chat-send-btn` is disabled
+    (front-end's "agent busy" signal), the Enter key handler turns into a
+    no-op — fill happens but submit doesn't, and the message is silently
+    lost. Pre-2026-05-20 send_chat only checked `textarea.disabled` and
+    printed `[chat>]` regardless of whether the chat actually posted,
+    masking these losses. Now we wait for send-btn to be ready, then
+    verify the textarea cleared after Enter; on failure, retry up to
+    max_retries times before raising."""
+    for attempt in range(1, max_retries + 1):
+        if not wait_chat_send_ready(page, timeout=180):
+            log(f"  [chat] send NOT ready (textarea or send-btn disabled), attempt {attempt}")
+        if _overlay_visible(page):
+            log("  [modal] overlay before chat send -> dismissing")
+            _dismiss_modal(page)
+        ta = page.locator("textarea[placeholder*='TALOS'], textarea").first
+        ta.wait_for(state="visible", timeout=10000)
+        try:
+            ta.click(timeout=8000)
+        except Exception:
+            _dismiss_modal(page)
+            ta.click(timeout=8000)
+        time.sleep(0.2)
+        ta.fill(text); time.sleep(0.3)
+        ta.press("Enter"); time.sleep(2)
+        # Verify textarea cleared (= submit happened).
+        try:
+            remaining = page.evaluate("() => (document.querySelector('textarea') || {}).value || ''")
+        except Exception:
+            remaining = ""
+        if not remaining.strip():
+            log(f"  [chat>] {text[:90]}")
+            return
+        log(f"  [chat] attempt {attempt}: Enter swallowed (textarea still has {remaining[:30]!r}), retrying")
+        # Clear and wait a bit before retry.
+        try:
+            ta.fill("")
+        except Exception:
+            pass
+        time.sleep(3)
+    log(f"  [chat] GIVING UP after {max_retries} attempts: {text[:90]}")
+    raise RuntimeError(f"send_chat failed to post message after {max_retries} retries: {text[:60]}")
 
 
 def new_session(page):
