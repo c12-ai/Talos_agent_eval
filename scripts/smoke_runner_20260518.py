@@ -3,7 +3,7 @@
 Smoke runner for the 2026-05-18 link-validation batch.
 
 Drives conv briefs through the live TALOS frontend via the Mac Tailscale relay
-(100.118.16.118), captures per-turn agent output + tool calls from Phoenix root
+(100.84.102.34), captures per-turn agent output + tool calls from Phoenix root
 spans, and snapshots workflow-state. Phoenix annotation is a SEPARATE pass.
 
 Safety:
@@ -34,8 +34,8 @@ def cst_stamp(fmt):
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-TALOS_BASE = "http://100.118.16.118:8080"
-PHOENIX_BASE = "http://100.118.16.118:6006"
+TALOS_BASE = "http://100.84.102.34:8080"
+PHOENIX_BASE = "http://100.84.102.34:6006"
 PROJECT_ID = "UHJvamVjdDoy"
 TLC_IMAGE = str(ROOT / "demo.jpeg")
 DATASET = ROOT / "agent_eval_dataset.json"
@@ -223,6 +223,20 @@ def body_text(page):
         return ""
 
 
+def _re_button_visible(page) -> bool:
+    """True only when the '+ 添加茄形瓶' button is rendered (i.e. the step is
+    active), not just when the string appears as a pending timeline label."""
+    for sel in ("button:has-text('+ 添加茄形瓶')",
+                "[role='button']:has-text('+ 添加茄形瓶')"):
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible(timeout=400):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 # --------------------------------------------------------------------------- run one conv
 def run_conv(brief, browser, args):
     cid = brief["conv_id"]
@@ -261,6 +275,25 @@ def run_conv(brief, browser, args):
             params_given = True
         log(f"  --- turn {k+1}/{len(brief['user_turns'])} idx={turn['user_idx']} "
             f"stage={stage} exp_tool={turn['expected_tool']} ---")
+
+        # CC→RE handoff: in a CC+RE conv, if we're still in cc_wait and the
+        # upcoming turn is NOT a progress query (expected_tool is None), block
+        # until CC reaches terminal so stage can advance to re_spec before the
+        # RE spec/submit panel needs to be active.
+        if (is_ccre and stage == "cc_wait" and turn.get("expected_tool") is None
+                and not _task_terminal(session_id, "cc")):
+            log(f"  [handoff] turn {k+1} non-progress-query in cc_wait -> "
+                f"block-waiting CC terminal before send")
+            _wait_lab_terminal(session_id, want="cc")
+            final_ct = _read_cc_column_type(session_id)
+            if final_ct == "silica_12g":
+                cc_spec_violation = None
+            elif final_ct:
+                cc_spec_violation = final_ct
+            log(f"  [GUARD] §4.3 column_type at CC terminal: {final_ct}")
+            stage = "re_spec"
+            log(f"  [handoff] stage advanced to re_spec")
+
         send_chat(page, ut)
         wait_textarea_enabled(page, timeout=150)
         time.sleep(2)
@@ -300,37 +333,48 @@ def run_conv(brief, browser, args):
                 from talos_panel_ui import submit_cc_via_ui
                 submit_cc_via_ui(page, slot_label=args.slot_label, slot_id=args.slot_id)
                 rec["panel_action"] = "submit_cc"; submitted_tasks.append("cc"); stage = "cc_wait"
-                # Guide §4.3 HARD rule: column spec must be silica_12g. Verify.
+                # §4.3 transient read for diagnostics only; backend may write
+                # the slot's installed-cartridge spec first (e.g. silica_40g)
+                # and override to silica_12g once the run starts. The terminal
+                # reading at CC completion is authoritative — defer the
+                # violation check to there.
                 ct = None
                 for _ in range(8):
                     time.sleep(3)
-                    for tkx in (api_workflow_state(session_id).get("tasks") or []):
-                        if "cc" in (tkx.get("task_type") or ""):
-                            ct = ((tkx.get("user_params") or tkx.get("params")) or {}
-                                  ).get("column_type")
+                    ct = _read_cc_column_type(session_id) or ct
                     if ct:
                         break
-                rec["cc_column_type"] = ct
-                if ct and ct != "silica_12g":
-                    cc_spec_violation = ct
-                    log(f"  [GUARD] §4.3 VIOLATION column_type={ct} (must be silica_12g)")
-                else:
-                    log(f"  [GUARD] §4.3 column_type={ct}")
+                rec["cc_column_type_post_submit"] = ct
+                log(f"  [GUARD] §4.3 column_type post-submit (transient): {ct}")
 
         elif (stage == "re_spec" and (params_given or is_ccre)
-              and any(x in bt for x in ["旋蒸参数", "溶剂体系", "水浴温度", "压力梯度"])):
+              and any(x in bt for x in ["旋蒸参数", "溶剂体系", "水浴温度", "压力梯度"])
+              and _re_task_phase(session_id)[0] in ("collecting_spec", "collecting_params")):
+            # Gate the in-loop trigger on workflow-state too: CC summary cards
+            # leak "溶剂体系" into body text after CC completes, which used to
+            # fire this branch prematurely (re_agent still not_started ->
+            # confirm_re_spec wastes 180s clicking nothing). The API check
+            # ensures we only confirm when the agent has actually produced a
+            # spec.
             from talos_panel_ui import confirm_re_spec_via_ui
-            confirm_re_spec_via_ui(page)
-            rec["panel_action"] = "confirm_re_spec"; stage = "re_submit"
+            ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
+            if ok:
+                rec["panel_action"] = "confirm_re_spec"; stage = "re_submit"
+            else:
+                rec["panel_action"] = "confirm_re_spec_TIMEOUT"
+                log("  [panel] RE spec confirm timed out in-loop — post-loop finalize will retry")
 
-        elif stage == "re_submit" and dispatch_intent(ut) and any(x in bt for x in ["茄形瓶", "添加茄形瓶"]):
+        elif stage == "re_submit" and dispatch_intent(ut) and _re_button_visible(page):
             if not args.allow_dispatch:
                 rec["panel_action"] = "submit_re_SKIPPED_gated"; dispatch_gated = True; stage = "blocked"
                 log("  [panel] RE submit gated (no --allow-dispatch)")
             else:
-                from talos_panel_ui import submit_re_via_ui
-                submit_re_via_ui(page)
-                rec["panel_action"] = "submit_re"; submitted_tasks.append("re"); stage = "re_wait"
+                from talos_panel_ui import submit_re_params_via_ui
+                ok = submit_re_params_via_ui(page)
+                if ok:
+                    rec["panel_action"] = "submit_re"; submitted_tasks.append("re"); stage = "re_wait"
+                else:
+                    rec["panel_action"] = "submit_re_FAILED"; stage = "re_submit"
 
         if rec.get("panel_action") in ("approve_plan", "confirm_cc_spec", "submit_cc",
                                        "confirm_re_spec", "submit_re"):
@@ -342,6 +386,12 @@ def run_conv(brief, browser, args):
         # Non-blocking: let subsequent progress-query turns fire DURING conducting.
         if stage == "cc_wait" and _task_terminal(session_id, "cc"):
             log("  [lab] CC reached terminal")
+            final_ct = _read_cc_column_type(session_id)
+            if final_ct == "silica_12g":
+                cc_spec_violation = None
+            elif final_ct:
+                cc_spec_violation = final_ct
+            log(f"  [GUARD] §4.3 column_type at CC terminal: {final_ct}")
             stage = "re_spec" if is_re else "done"
         elif stage == "re_wait" and _task_terminal(session_id, "re"):
             log("  [lab] RE reached terminal")
@@ -350,7 +400,39 @@ def run_conv(brief, browser, args):
     # Loop ended: finalize any still-running submitted lab task(s).
     if stage == "cc_wait":
         _wait_lab_terminal(session_id, want="cc")
+        final_ct = _read_cc_column_type(session_id)
+        if final_ct == "silica_12g":
+            cc_spec_violation = None
+        elif final_ct:
+            cc_spec_violation = final_ct
+        log(f"  [GUARD] §4.3 column_type at CC terminal (post-loop): {final_ct}")
         stage = "re_spec_unreached" if is_re else "done"
+
+    # Post-loop RE finalize: brief turns alone may not push live agent through
+    # the panel-driven RE flow. If we still need RE, send an articulated
+    # startup prompt (idempotent if backend already advanced), then drive
+    # spec confirm via state-driven helper, then optionally dispatch.
+    #
+    # Skip when CC was gated (no --allow-dispatch in a CC+RE conv): CC never
+    # ran, so an RE startup prompt would be lying ("过柱完成") and gets
+    # rejected. For RE-only convs (single_rotovap) we always try.
+    re_finalize_log: dict | None = None
+    re_should_finalize = is_re and (
+        ("cc" in submitted_tasks) or not is_cc  # CC actually submitted, OR RE-only conv
+    )
+    if re_should_finalize and stage in ("re_spec", "re_submit", "re_spec_unreached"):
+        re_finalize_log = _drive_re_after_cc(page, brief, session_id, args, submitted_tasks)
+        if re_finalize_log.get("reached_collecting_params"):
+            if re_finalize_log.get("submitted_re"):
+                stage = "re_wait"
+            elif re_finalize_log.get("dispatch_gated"):
+                stage = "re_collecting_params_no_dispatch"
+                dispatch_gated = True
+            else:
+                stage = re_finalize_log.get("final_stage", "re_submit")
+        else:
+            stage = re_finalize_log.get("final_stage", "re_spec_failed")
+
     if stage == "re_wait":
         _wait_lab_terminal(session_id, want="re")
         stage = "done"
@@ -368,11 +450,22 @@ def run_conv(brief, browser, args):
         "final_stage": stage, "planner_mismatch": planner_mismatch,
         "submitted_tasks": submitted_tasks, "dispatch_gated": dispatch_gated,
         "cc_spec_violation": cc_spec_violation,
+        "re_finalize": re_finalize_log,
         "turns": turns_out, "workflow_state": state, "phoenix_spans": spans,
     }
 
 
 TERMINAL = ("completed", "failed", "cancelled", "discarded", "timeout")
+
+
+def _read_cc_column_type(session_id):
+    """Read column_type from the CC task's user_params/params. Returns None if
+    no CC task is recorded yet."""
+    for tkx in (api_workflow_state(session_id).get("tasks") or []):
+        if "cc" in (tkx.get("task_type") or ""):
+            return ((tkx.get("user_params") or tkx.get("params")) or {}
+                    ).get("column_type")
+    return None
 
 
 def _task_run_status(session_id, want=None):
@@ -405,6 +498,151 @@ def _wait_lab_terminal(session_id, want=None, timeout=1200):
             return s
     log("  [lab] WAIT TIMEOUT")
     return "timeout"
+
+
+# ---------------------------------------------------------------------------
+# RE post-loop drive (state-machine driven; survives live agent variance)
+# ---------------------------------------------------------------------------
+
+def _re_task_phase(session_id):
+    """Return (phase, run_status) for the re_agent task, or (None, None)."""
+    for t in (api_workflow_state(session_id).get("tasks") or []):
+        if "re" in (t.get("task_type") or ""):
+            return t.get("phase"), (t.get("latest_run") or {}).get("status")
+    return None, None
+
+
+def _compose_re_nudge(brief):
+    """Compose a fully-articulated RE startup prompt from brief context.
+
+    Why each piece matters (verified empirically 2026-05-20):
+      - "过柱完成，下一步做旋蒸" + intent: triggers admittance=yes (not
+        rejected as bare confirmation) and starts re_agent.
+      - **solvent ratio** (`PE:EA=1:1`): without an explicit ratio the agent
+        leaves `spec.solvent_ratio=null`, and then panel 确认 clicks don't
+        advance backend to collecting_params (silent reject).
+      - volume + container type: avoids agent asking follow-up questions
+        ("装在什么瓶里？") that stall re_phase at not_started.
+      - thermal stability: avoids agent asking for thermal constraints.
+    """
+    scene = (brief.get("scene") or "")
+    thermal = "化合物热稳定性正常，没有分解温度约束。"
+    if any(k in scene for k in ["热敏", "分解", "70 度", "70°C", "60 度", "60°C"]):
+        thermal = "化合物对温度较敏感，请压低水浴温度（≤30°C）以避免分解。"
+    return (
+        "好的，过柱完成，下一步做旋蒸。"
+        f"{thermal}"
+        "合并液约 200 ml，体系是 PE 和 EA，比例 PE:EA = 1:1，装在 250 ml 茄形瓶里。"
+        "请生成旋蒸执行参数推荐（水浴温度、压力梯度），我会在右侧面板确认。"
+    )
+
+
+def _wait_chat_ready(page, session_id, timeout=120):
+    """After CC terminal the chat textarea is briefly disabled while the
+    backend transitions. Poll until it's interactive again (mirrors
+    talos_cc_re_frontend_runner.wait_for_chat_ready_or_refresh)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            ta = page.locator("textarea").first
+            if ta.count() and ta.get_attribute("disabled") is None:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
+def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
+    """State-machine driven RE finalize.
+
+    Sequence:
+      1. wait for chat textarea ready
+      2. if re_phase == not_started: send articulated startup prompt
+      3. wait for re_phase == collecting_spec (≤240s)
+      4. call confirm_re_spec_via_ui (state-driven, advances to
+         collecting_params with chat fallback)
+      5. if --allow-dispatch: call submit_re_params_via_ui, wait terminal
+         else: stop (dispatch_gated)
+
+    Returns a log dict so the caller can attach it to the conv output JSON
+    for diagnostics.
+    """
+    rec = {"phase_seq": []}
+
+    def record_phase(tag):
+        ph, st_ = _re_task_phase(session_id)
+        # Dedup: only record when phase or stage tag changes.
+        prev = rec["phase_seq"][-1] if rec["phase_seq"] else None
+        if not prev or prev.get("phase") != ph or prev.get("at") != tag:
+            rec["phase_seq"].append({"at": tag, "phase": ph, "run_status": st_})
+        return ph
+
+    log("  [re-finalize] start")
+    if not _wait_chat_ready(page, session_id, timeout=120):
+        log("  [re-finalize] WARNING: chat textarea never went enabled")
+    record_phase("start")
+
+    ph = record_phase("pre_nudge")
+    if ph in (None, "not_started"):
+        nudge = _compose_re_nudge(brief)
+        log(f"  [re-finalize] sending RE startup prompt: {nudge[:80]}...")
+        try:
+            send_chat(page, nudge)
+            rec["nudge_sent"] = True
+            rec["nudge_text"] = nudge
+        except Exception as exc:
+            log(f"  [re-finalize] nudge send failed: {exc}")
+            rec["nudge_error"] = str(exc)
+            rec["final_stage"] = "re_spec_failed"
+            return rec
+    else:
+        rec["nudge_sent"] = False
+        log(f"  [re-finalize] re_phase already {ph}, skipping nudge")
+
+    # Wait for collecting_spec.
+    log("  [re-finalize] waiting for re_phase=collecting_spec (≤240s)...")
+    deadline = time.time() + 240
+    while time.time() < deadline:
+        time.sleep(6)
+        ph = record_phase("waiting_spec")
+        if ph in ("collecting_spec", "collecting_params"):
+            log(f"  [re-finalize] re_phase reached {ph}")
+            break
+    else:
+        log("  [re-finalize] TIMEOUT waiting for collecting_spec")
+        rec["final_stage"] = "re_spec_failed"
+        return rec
+
+    # Confirm RE spec via state-driven helper.
+    from talos_panel_ui import confirm_re_spec_via_ui
+    ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
+    record_phase("post_confirm_spec")
+    if not ok:
+        log("  [re-finalize] confirm_re_spec_via_ui returned False")
+        rec["final_stage"] = "re_spec_failed"
+        return rec
+    rec["reached_collecting_params"] = True
+    rec["final_stage"] = "re_submit"
+
+    # Dispatch gate.
+    if not args.allow_dispatch:
+        log("  [re-finalize] dispatch gated (no --allow-dispatch) — stopping at collecting_params")
+        rec["dispatch_gated"] = True
+        return rec
+
+    # Submit final params (add flask, paint tubes, click confirm).
+    from talos_panel_ui import submit_re_params_via_ui
+    if submit_re_params_via_ui(page):
+        rec["submitted_re"] = True
+        submitted_tasks.append("re")
+        record_phase("post_submit_re")
+        rec["final_stage"] = "re_wait"
+    else:
+        log("  [re-finalize] submit_re_params_via_ui FAILED")
+        rec["submitted_re"] = False
+        rec["final_stage"] = "re_submit_failed"
+    return rec
 
 
 def _collect_spans(brief, started, ended):
@@ -496,17 +734,23 @@ def main():
         finally:
             browser.close()
 
-    out = args.out or str(ROOT / "eval_outputs" / f"smoke_{cst_stamp('%Y%m%d_%H%M')}.json")
-    Path(out).write_text(json.dumps(results, ensure_ascii=False, indent=2))
-    log(f"\nSUMMARY -> {out}")
+    if args.out:
+        Path(args.out).write_text(json.dumps(results, ensure_ascii=False, indent=2))
+        log(f"\nSUMMARY (also written to {args.out}):")
+    else:
+        log(f"\nSUMMARY (stdout-only; pass --out PATH to also write JSON):")
     for cid, r in results.items():
         if "error" in r:
             log(f"  {cid}: ERROR {r['error']}")
         else:
+            rf = r.get("re_finalize") or {}
             log(f"  {cid}: sess={r['session_id']} stage={r['final_stage']} "
                 f"submitted={r['submitted_tasks']} planner_mismatch={r['planner_mismatch']} "
                 f"cc_spec_violation={r.get('cc_spec_violation')} "
-                f"gated={r['dispatch_gated']} spans={len(r.get('phoenix_spans') or [])}")
+                f"gated={r['dispatch_gated']} spans={len(r.get('phoenix_spans') or [])}"
+                f" re_final={rf.get('final_stage')}"
+                f" re_nudge_sent={rf.get('nudge_sent')}"
+                f" re_phases={[p.get('phase') for p in (rf.get('phase_seq') or [])]}")
 
 
 if __name__ == "__main__":

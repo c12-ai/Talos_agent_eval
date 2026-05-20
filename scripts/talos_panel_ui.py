@@ -507,10 +507,69 @@ def submit_re_via_ui(page) -> bool:
 # RE spec confirmation
 # ---------------------------------------------------------------------------
 
-def confirm_re_spec_via_ui(page) -> bool:
-    """Confirm RE spec panel."""
-    print("[UI] confirm_re_spec_via_ui: clicking confirm...")
-    time.sleep(1)
-    ok = _click_confirm_any(page)
-    print(f"[UI] confirm_re_spec_via_ui: done, confirm clicked={ok}")
-    return ok
+def _re_final_panel_visible(page) -> bool:
+    """The '+ 添加茄形瓶' control is a real button that appears only after
+    the backend advances to the 添加茄形瓶 step. Substring scans against
+    ``body.innerText`` falsely match the timeline's pending step titles
+    ("添加茄形瓶" as a label), so check for the button itself."""
+    for sel in ("button:has-text('+ 添加茄形瓶')",
+                "[role='button']:has-text('+ 添加茄形瓶')"):
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible(timeout=400):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def confirm_re_spec_via_ui(page, base_url: str, session_id: str) -> bool:
+    """Confirm RE spec panel; backend must advance from collecting_spec to
+    collecting_params.
+
+    Stable implementation: delegates to talos_re_frontend_runner.confirm_re_spec
+    which is workflow-state-driven (polls API for phase=='collecting_params'
+    instead of relying on DOM keyword matches). It performs a scoped click of
+    the active step-card's 确认 button, retries up to ~3 times, and falls back
+    to a visible chat confirmation if clicks fail to advance backend state.
+
+    Precondition: re_agent must already be at collecting_spec (i.e. the user
+    has sent enough chat to make the agent generate RE recommendations).
+    The smoke_runner is responsible for sending an articulated RE prompt
+    before calling this, if brief turns alone don't push re_agent past
+    not_started.
+    """
+    from talos_re_frontend_runner import confirm_re_spec as _api_confirm_re_spec
+    print(f"[UI] confirm_re_spec_via_ui: session={session_id}")
+    try:
+        _api_confirm_re_spec(page, base_url, session_id)
+        print("[UI] confirm_re_spec_via_ui: OK (collecting_params reached)")
+        return True
+    except TimeoutError as exc:
+        print(f"[UI] confirm_re_spec_via_ui: TIMEOUT — {exc}")
+        return False
+    except Exception as exc:
+        print(f"[UI] confirm_re_spec_via_ui: ERROR — {exc}")
+        return False
+
+
+def submit_re_params_via_ui(page, temperature_c: str = "35",
+                            duration_min: str = "1",
+                            tube_count: int = 5) -> bool:
+    """Submit the RE final-params panel (add flask, paint tubes, click
+    confirm). Delegates to talos_re_frontend_runner.submit_re_params, which
+    is the proven sequence used in standalone RE runs.
+
+    Precondition: backend at collecting_params (i.e. confirm_re_spec_via_ui
+    has succeeded). The function will wait briefly for the params panel
+    keywords to render before acting.
+    """
+    from talos_re_frontend_runner import submit_re_params as _api_submit_re
+    print(f"[UI] submit_re_params_via_ui: t={temperature_c}°C dur={duration_min}min tubes=1-{tube_count}")
+    try:
+        _api_submit_re(page, temperature_c, duration_min, tube_count)
+        print("[UI] submit_re_params_via_ui: OK (confirm clicked)")
+        return True
+    except Exception as exc:
+        print(f"[UI] submit_re_params_via_ui: ERROR — {exc}")
+        return False

@@ -20,7 +20,7 @@ from pathlib import Path
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
-PHOENIX_BASE = "http://100.118.16.118:6006"
+PHOENIX_BASE = "http://100.84.102.34:6006"
 PROJECT_ID = "UHJvamVjdDoy"
 REQ = {"proxies": {"http": None, "https": None}, "timeout": 20}
 
