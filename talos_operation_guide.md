@@ -2,6 +2,25 @@
 
 > 本文只描述如何操作 TALOS 前端、右侧实验工作流面板、任务下发和批量调度。Phoenix 标注规则见 `phoenix_annotation_criteria.md`。
 
+## 0. 核心原则（必读，违反会导致整次测试白跑）
+
+1. **`eval_inputs/conv001/conv002/...` 和 `agent_eval_dataset.json` 里的对话是参考素材，不是逐字脚本**。User simulator 要像真实化学家自然提问/回答，可以省略、合并、换说法。死扣字面 = agent 没法走完流程。详见 §2。
+
+2. **CC 任务到 RE 任务的衔接必须由 user 显式说"开始旋蒸"才会触发**。CC `latest_run.status` 进 terminal 后，agent 会停下来等指令；这时光发"热稳定性正常"/"下发"等短句会被 admittance 当成面板确认意图直接拒收，**re_agent 永远停在 `not_started`**。正确做法：发一段含 4 个要素的自然语言——
+   - **明确意图**："开始旋蒸"
+   - **溶剂体系 + 比例**（如 `PE:EA = 1:1`；**比例缺了，spec 里 `solvent_ratio=null`，前端确认按钮可点但 backend 静默不推**）
+   - **合并液体积 + 容器**（如 `200 ml，装在 250 ml 茄形瓶里`，否则 agent 会追问把流程卡住）
+   - **热稳定性**（"正常" 或 具体分解温度约束）
+
+   示例（直接抄就行）：
+   ```
+   好的，过柱完成，开始旋蒸。化合物热稳定性正常，没有分解温度约束。
+   合并液约 200 ml，体系是 PE 和 EA，比例 PE:EA = 1:1，装在 250 ml 茄形瓶里。
+   请生成旋蒸执行参数推荐（水浴温度、压力梯度），我会在右侧面板确认。
+   ```
+
+3. **权威成功信号是 `workflow-state` API 的 `phase` 字段，不是 DOM 关键字**。CC 成功 = `cc_agent.phase == collecting_params`，RE 成功 = `re_agent.phase == collecting_params`。眼睛看到按钮被点了不代表 backend 推进了。
+
 ## 1. 会话命名
 
 每次批量测试使用统一前缀：
@@ -17,7 +36,11 @@
 
 ## 2. User Simulator 行为
 
-`agent_eval_review.md` / `eval_inputs/test_inputs.md` 是参考素材，不是必须逐字发送的脚本。
+`agent_eval_review.md` / `eval_inputs/test_inputs.md` / `agent_eval_dataset.json` 里的 conv（conv001、conv002、...）都是**参考素材**，**不是必须逐字发送的脚本**。User simulator 该把这些用例当作"问题清单 + 信息库"——agent 当下问什么，就从用例里取相关信息回答；agent 没问的，不用强塞。
+
+⚠️ 反例（典型错误，每次都会把流程卡死）：
+- 严格按用例 turn 顺序把"热稳定性正常"、"下发"等短句往外发——这些是**面板确认意图**，agent 的 admittance 会拒收，state 不会推进。
+- CC terminal 后不发"开始旋蒸"，直接照搬用例下一句——agent 等不到 RE 启动信号，`re_agent.phase` 永远停在 `not_started`。
 
 User simulator 应该像真实化学家一样自然回应：
 
@@ -137,8 +160,8 @@ lab 完成任务后，agent 内部 `state.cc.phase` / `state.re.phase` 不一定
 4. 如果 plan 只包含 CC 或只包含 RE，且测试目标是 CC+RE，则不要批准该方案；应记录为 planner/plan mismatch，并按 Phoenix 标注要求标 `expected_plan=cc,re`。
 5. 只有 plan 中已经包含 CC+RE，才点击“批准方案”。
 6. 按右侧面板顺序完成 CC spec/params、提交 CC。
-7. CC lab run terminal 后，按该已批准方案继续推进到 RE task。
-8. 按右侧面板完成 RE spec/params、提交 RE。
+7. CC lab run terminal 后，**user 必须主动发一段含"开始旋蒸"的自然语言**，并把 RE 所需 4 个要素一次性给齐（溶剂体系+比例、合并液体积、容器、热稳定性）。模板见 §0 核心原则。不发这句，agent 不会启动 RE。
+8. 等 `re_agent.phase` 进入 `collecting_spec` 后再到右侧面板确认 RE spec/params、提交 RE。
 9. RE lab 任务进入 `conducting` 后，主动插入 1-3 个执行中追问。
 
 首轮 CC+RE 用户消息示例：
