@@ -206,14 +206,37 @@ def new_session(page):
         try:
             b = page.get_by_text(t, exact=True).first
             if b.count() and b.is_visible(timeout=2000):
-                b.click(); time.sleep(2); break
+                b.click()
+                # The click triggers a SPA route change. On slower hosts the
+                # bare time.sleep(2) wasn't enough and the subsequent
+                # page.evaluate hit "Execution context was destroyed". Wait
+                # for the DOM to settle first.
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
+                time.sleep(2)
+                break
         except Exception:
             continue
-    sid = page.evaluate(
-        "keys => { for (const k of keys){ const v=localStorage.getItem(k); if(v) return v;} return ''; }",
-        SESSION_KEYS,
-    )
-    return sid or "unknown"
+    # Retry the evaluate a few times: even after domcontentloaded the SPA may
+    # still be hydrating and a context-destroyed race can fire once.
+    last_exc: Exception | None = None
+    for _ in range(5):
+        try:
+            sid = page.evaluate(
+                "keys => { for (const k of keys){ const v=localStorage.getItem(k); if(v) return v;} return ''; }",
+                SESSION_KEYS,
+            )
+            return sid or "unknown"
+        except Exception as exc:
+            msg = str(exc)
+            if "Execution context was destroyed" in msg or "navigation" in msg.lower():
+                last_exc = exc
+                time.sleep(1.5)
+                continue
+            raise
+    raise last_exc if last_exc else RuntimeError("new_session: evaluate failed")
 
 
 def body_text(page):
