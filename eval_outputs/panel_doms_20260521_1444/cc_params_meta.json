@@ -1,0 +1,57 @@
+{
+  "phase": "cc_params",
+  "session_id": "576dc5cb-5b22-4161-a3b7-67aa8d27b3f9",
+  "captured_at": "2026-05-21T14:58:44.321823",
+  "cc_phase": "collecting_params",
+  "re_phase": null,
+  "re_spec": {},
+  "active_card_text_snippet": "过柱参数确认\n样品柱\n样品柱\n请选择样品柱\n管理插槽\n硅胶柱规格\n硅胶柱规格\n12g\n24g\n40g\n溶剂体系\n溶剂体系: PE, EA\n梯度溶剂\nPE 石油醚\nEA 乙酸乙酯\nDCM 二氯甲烷\nMeOH 甲醇\n溶剂梯度\n#\t持续时间 (min)\t梯度浓度 (%)\t\n1\t\t\tX\n2\t\t\tX\n3\t\t\tX\n4\t\t\tX\n+ 添加行\n确认",
+  "modal_text_snippet": "",
+  "tasks": [
+    {
+      "task_type": "cc_agent",
+      "phase": "collecting_params",
+      "spec": {
+        "solvents": [
+          "PE",
+          "EA"
+        ],
+        "rf_values": [
+          0.35
+        ],
+        "solvent_ratio": [
+          3,
+          1
+        ],
+        "tlc_image_url": "https://s3.cn-northwest-1.amazonaws.com.cn/aichemengine-release-bundles/4b75adcf-720b-4ba5-be9a-8eb7c69307d5-demo.jpeg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIAWJGRYB4NH47YNFGD%2F20260521%2Fcn-northwest-1%2Fs3%2Faws4_request&X-Amz-Date=20260521T065505Z&X-Amz-Expires=3600&X-Amz-Signature=163f3b8d39c744374d74d844bd204cfc1ce20d4bea530bc3b9903f522a5c2cfb&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "sample_amount_g": 0.2
+      },
+      "params": {
+        "column_type": "silica_24g",
+        "solvent_system": [
+          "PE",
+          "EA"
+        ],
+        "gradient_solvent": "EA",
+        "solvent_gradient": [
+          {
+            "duration_min": 0.0,
+            "gradient_pct": 0.0
+          },
+          {
+            "duration_min": 2.0,
+            "gradient_pct": 0.0
+          },
+          {
+            "duration_min": 26.0,
+            "gradient_pct": 75.0
+          },
+          {
+            "duration_min": 5.0,
+            "gradient_pct": 75.0
+          }
+        ]
+      }
+    }
+  ]
+}

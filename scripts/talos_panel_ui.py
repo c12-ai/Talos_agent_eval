@@ -520,6 +520,157 @@ def _re_final_panel_visible(page) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# RE spec direct UI fill (deterministic; bypasses chat / agent admittance)
+#
+# Confirmed via 2026-05-21 panel-DOM capture (eval_outputs/panel_doms_*/):
+#   - 溶剂体积 (mL): a single `<input type="number" min="2">` inside the
+#     "溶剂信息" card, identified by sibling `<label>` text.
+#   - Solvent table: each row has a `<select>` (solvent) + `<input type="number">`
+#     (ratio); add new rows by clicking the `+ 添加溶剂` button inside the card.
+#
+# We mutate values via the native HTMLInputElement/HTMLSelectElement `value`
+# setters and dispatch input+change events — React-controlled inputs miss
+# updates if we just assign `.value` directly.
+# ---------------------------------------------------------------------------
+
+_RE_SPEC_FILL_JS = r"""
+(args) => {
+  const { volume_ml, solvents, ratios } = args;
+  const out = {volume_filled: false, rows_filled: 0, errors: []};
+
+  const setInputValue = (el, val) => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value').set;
+    setter.call(el, String(val));
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  };
+  const setSelectValue = (el, val) => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(el, String(val));
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  };
+
+  // Locate "溶剂信息" card.
+  const titles = Array.from(document.querySelectorAll('.card-section-title'));
+  const title = titles.find(e => (e.textContent || '').trim() === '溶剂信息');
+  if (!title) { out.errors.push('溶剂信息 card title not found'); return out; }
+  const card = title.closest('.card-section');
+  if (!card) { out.errors.push('溶剂信息 .card-section not found'); return out; }
+
+  // ---- Fill volume_ml ----
+  if (volume_ml !== null && volume_ml !== undefined) {
+    const lab = Array.from(card.querySelectorAll('label')).find(
+      l => /溶剂体积\s*\(mL\)/.test((l.textContent || '').trim()));
+    if (!lab) {
+      out.errors.push('溶剂体积 (mL) label not found');
+    } else {
+      const container = lab.closest('.field-v6') || lab.parentElement;
+      const input = container && container.querySelector('input[type=number]');
+      if (!input) {
+        out.errors.push('volume_ml input not found in field container');
+      } else {
+        setInputValue(input, volume_ml);
+        out.volume_filled = true;
+        out.volume_value = input.value;
+      }
+    }
+  }
+
+  // ---- Fill solvent rows (solvents + ratios in lockstep) ----
+  if (solvents && ratios && solvents.length === ratios.length && solvents.length > 0) {
+    const table = card.querySelector('table');
+    if (!table) {
+      out.errors.push('solvent table not found');
+    } else {
+      const realRows = () => Array.from(table.querySelectorAll('tbody tr')).filter(
+        tr => !(tr.textContent || '').includes('暂无溶剂数据'));
+      for (let i = 0; i < solvents.length; i++) {
+        const rows = realRows();
+        const tr = rows[i];
+        if (!tr) { out.errors.push(`row ${i} not present; click + 添加溶剂 first`); continue; }
+        const sel = tr.querySelector('select');
+        const inp = tr.querySelector('input[type=number]');
+        if (sel) setSelectValue(sel, solvents[i]);
+        else out.errors.push(`row ${i}: solvent select not found`);
+        if (inp) setInputValue(inp, ratios[i]);
+        else out.errors.push(`row ${i}: ratio input not found`);
+        out.rows_filled += 1;
+      }
+    }
+  }
+  return out;
+}
+"""
+
+
+def _count_re_spec_solvent_rows(page) -> int:
+    return page.evaluate(r"""() => {
+      const titles = Array.from(document.querySelectorAll('.card-section-title'));
+      const title = titles.find(e => (e.textContent || '').trim() === '溶剂信息');
+      const card = title && title.closest('.card-section');
+      if (!card) return -1;
+      const table = card.querySelector('table');
+      if (!table) return -1;
+      return Array.from(table.querySelectorAll('tbody tr')).filter(
+        tr => !(tr.textContent || '').includes('暂无溶剂数据')).length;
+    }""")
+
+
+def fill_re_spec_via_ui(page, *, volume_ml=None, solvents=None, ratios=None) -> dict:
+    """Directly fill missing RE spec fields via panel inputs, bypassing chat
+    and agent admittance. Returns a result dict with what was filled.
+
+    Args:
+      volume_ml: float | None — if set, fill the 溶剂体积 (mL) input.
+      solvents: list[str] | None — e.g. ["PE", "EA"]. Adds rows via
+        `+ 添加溶剂` if needed, then fills each row's solvent select.
+      ratios: list[float] | None — same length as `solvents`; fills each
+        row's ratio input.
+
+    The caller is responsible for clicking the panel `确认` button afterwards
+    (usually via `confirm_re_spec_via_ui`).
+    """
+    print(f"[UI] fill_re_spec_via_ui: volume_ml={volume_ml} "
+          f"solvents={solvents} ratios={ratios}")
+
+    # 1. Add solvent rows if needed (clicks must come from Playwright; the JS
+    #    fill below operates on the resulting DOM).
+    if solvents:
+        existing = _count_re_spec_solvent_rows(page)
+        if existing < 0:
+            print("[UI] fill_re_spec_via_ui: 溶剂信息 card / table not found")
+            return {"ok": False, "error": "溶剂信息 card not found"}
+        needed = max(0, len(solvents) - existing)
+        if needed:
+            print(f"[UI] fill_re_spec_via_ui: adding {needed} solvent row(s) "
+                  f"(existing={existing}, target={len(solvents)})")
+            for _ in range(needed):
+                try:
+                    btn = page.locator(
+                        ".step-card-active button:has-text('+ 添加溶剂')").first
+                    btn.click(timeout=3000)
+                    time.sleep(0.4)
+                except Exception as exc:
+                    print(f"[UI] fill_re_spec_via_ui: + 添加溶剂 click failed: {exc}")
+                    return {"ok": False, "error": f"+ 添加溶剂 click failed: {exc}"}
+
+    # 2. Apply values via JS (volume + per-row solvent/ratio in one shot).
+    result = page.evaluate(_RE_SPEC_FILL_JS, {
+        "volume_ml": volume_ml,
+        "solvents": solvents,
+        "ratios": ratios,
+    })
+    result["ok"] = not result.get("errors")
+    print(f"[UI] fill_re_spec_via_ui: result={result}")
+    # Brief pause for React state to settle before caller clicks 确认.
+    time.sleep(1.0)
+    return result
+
+
 def confirm_re_spec_via_ui(page, base_url: str, session_id: str) -> bool:
     """Confirm RE spec panel; backend must advance from collecting_spec to
     collecting_params.

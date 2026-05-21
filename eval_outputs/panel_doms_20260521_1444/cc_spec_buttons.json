@@ -1,0 +1,101 @@
+{
+  "active_card": [
+    {
+      "text": "上传 TLC 板图片并识别 Rf 值 点击打开识别面板",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div.space-y-3:nth-of-type(2) > div.card-section:nth-of-type(1) > div > div:nth-of-type(2) > div.flex.flex-col"
+    },
+    {
+      "text": "",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.flex.items-center:nth-of-type(1) > button.transition-colors"
+    },
+    {
+      "text": "拖拽 TLC 板图片到此处，或点击上传 支持 JPG、PNG 格式，最大 10MB",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.mt-2.flex:nth-of-type(2)"
+    },
+    {
+      "text": "识别 Rf 值",
+      "disabled": true,
+      "cssPath": "div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.flex.items-center:nth-of-type(4) > button.btn-v6.btn-primary-v6"
+    },
+    {
+      "text": "",
+      "disabled": false,
+      "cssPath": "div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.mt-4:nth-of-type(6) > div.flex.flex-col:nth-of-type(2) > div.flex.items-center > button.w-7.h-7"
+    },
+    {
+      "text": "添加 Rf 值",
+      "disabled": false,
+      "cssPath": "div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.mt-4:nth-of-type(6) > button.flex.items-center"
+    },
+    {
+      "text": "取消",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.flex.items-center:nth-of-type(3) > button.btn-v6.btn-secondary-v6:nth-of-type(1)"
+    },
+    {
+      "text": "确认",
+      "disabled": true,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.flex.items-center:nth-of-type(3) > button.btn-v6.btn-primary-v6:nth-of-type(2)"
+    },
+    {
+      "text": "X",
+      "disabled": false,
+      "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(1) > td.py-2:nth-of-type(4) > button.px-2.py-1"
+    },
+    {
+      "text": "X",
+      "disabled": false,
+      "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(2) > td.py-2:nth-of-type(4) > button.px-2.py-1"
+    },
+    {
+      "text": "+ 添加溶剂",
+      "disabled": false,
+      "cssPath": "div.space-y-3:nth-of-type(2) > div.card-section:nth-of-type(2) > div > div.space-y-2:nth-of-type(2) > div > button.mt-1.px-3"
+    },
+    {
+      "text": "确认",
+      "disabled": false,
+      "cssPath": "div.panel-body:nth-of-type(2) > div.timeline > div.timeline-step:nth-of-type(2) > div.step-card.step-card-active:nth-of-type(4) > div.card-section:nth-of-type(2) > button.btn-v6.btn-primary-v6"
+    }
+  ],
+  "modal": [
+    {
+      "text": "",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.flex.items-center:nth-of-type(1) > button.transition-colors"
+    },
+    {
+      "text": "拖拽 TLC 板图片到此处，或点击上传 支持 JPG、PNG 格式，最大 10MB",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.mt-2.flex:nth-of-type(2)"
+    },
+    {
+      "text": "识别 Rf 值",
+      "disabled": true,
+      "cssPath": "div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.flex.items-center:nth-of-type(4) > button.btn-v6.btn-primary-v6"
+    },
+    {
+      "text": "",
+      "disabled": false,
+      "cssPath": "div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.mt-4:nth-of-type(6) > div.flex.flex-col:nth-of-type(2) > div.flex.items-center > button.w-7.h-7"
+    },
+    {
+      "text": "添加 Rf 值",
+      "disabled": false,
+      "cssPath": "div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.px-6.py-5:nth-of-type(2) > div.mt-4:nth-of-type(6) > button.flex.items-center"
+    },
+    {
+      "text": "取消",
+      "disabled": false,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.flex.items-center:nth-of-type(3) > button.btn-v6.btn-secondary-v6:nth-of-type(1)"
+    },
+    {
+      "text": "确认",
+      "disabled": true,
+      "cssPath": "div.card-section:nth-of-type(1) > div > div.fixed.inset-0:nth-of-type(3) > div.modal-enter.bg-white > div.flex.items-center:nth-of-type(3) > button.btn-v6.btn-primary-v6:nth-of-type(2)"
+    }
+  ]
+}

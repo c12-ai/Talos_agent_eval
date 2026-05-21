@@ -82,14 +82,16 @@ CLI args:
    - `volume_ml=null`（brief 没给体积，2026-05-21 conv-008 案例）
    - `solvents=null/empty`（同类）
 
-   `RE_REQUIRED_SPEC_FIELDS = ("solvents", "solvent_ratio", "volume_ml")`（见 `smoke_runner_20260518.py`）。再发现新的 null-字段静默拒 bug，扩这个常量和 `_compose_re_supplement` 即可。
-4. **`_drive_re_after_cc` 是 spec-driven 闭环**，不是「nudge 一次就完事」。每轮读 `(phase, spec)` → 算 `missing` → 缺什么发什么：
-   - `phase=not_started` → 发完整 nudge（`_compose_re_nudge`）
-   - `phase=collecting_spec` 且有 missing → 发 field-targeted supplement（`_compose_re_supplement`），最多 3 次
-   - `phase=collecting_spec` 且 spec 完整 → 调 `confirm_re_spec_via_ui`
+   `RE_REQUIRED_SPEC_FIELDS = ("solvents", "solvent_ratio", "volume_ml")`（见 `smoke_runner_20260518.py`）。再发现新的 null-字段静默拒 bug，扩这个常量 + `fill_re_spec_via_ui` 的 JS 字段映射即可。
+4. **缺失 spec 字段用 UI 直填，不靠 chat**。`_drive_re_after_cc` 现在是：
+   - **A.** phase 在 `not_started` 时发一次 startup nudge（`_compose_re_nudge`，体积是 100-300 mL 之间的 per-run 随机值），把 agent 推进到 `collecting_spec`
+   - **B.** 等 15s 让 agent 自己把 spec 从聊天上下文填齐
+   - **C.** 仍有 missing 字段时调 `talos_panel_ui.fill_re_spec_via_ui`，**直接往面板的 `溶剂体积 (mL)` input、溶剂表 `<select>` + 比例 `<input>` 写值（React native setter + dispatch input/change events）**，绕开 admittance。然后轮询 30s 确认 backend spec 真的更新了。
+   - **D.** 点 `确认` 推进到 `collecting_params`（仍用 `confirm_re_spec_via_ui`）。
 
-   旧版（pre-2026-05-21）只看 phase 当 gate，遇到「brief 把 phase 推到 collecting_spec 但 spec 里有 null」就跳过 nudge → confirm 永远不推进 → `re_spec_failed`。
-5. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 补字段后再确认，省下白点 180s。
+   **为什么不再用 chat 兜底**：2026-05-21 conv-008 retry 实测，bare "补充 spec：合并液 200 ml" 这种短消息被 admittance 过滤、agent 完全没把值写进 spec，连发两次都不动。UI 直填是确定性路径，跟 agent 的 LLM 不确定性彻底解耦。
+5. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 走 UI-fill 流程，省下白点 180s。
+6. **面板 DOM 是已知量**：`scripts/dump_panel_doms.py` 跑一遍能扒出 cc_spec / cc_params / re_spec / re_params 四个面板的全部可编辑控件（label / cssPath / value / readonly）。再加新的 UI 直填字段前先用它复核当前 DOM；产物在 `eval_outputs/panel_doms_*/summary.md`。这条脚本不消耗 lab。
 
 ## 已知失败模式 / 怎么判断
 
@@ -97,7 +99,7 @@ CLI args:
 |---|---|---|
 | `done` | RE 跑到 terminal | 成功 |
 | `re_collecting_params_no_dispatch` | 没 `--allow-dispatch`，停在确认完 spec 那一步 | 设计就是这样，不是 bug |
-| `re_spec_failed` | spec 没在预算内完整化、或 confirm 拒绝推进 | 看 `re_finalize.phase_seq` 里每条的 `missing`：长期非空说明 supplement 没把字段喂进 spec——查 `_compose_re_supplement` 对该字段的措辞是否被 agent 接受，或扩 `RE_REQUIRED_SPEC_FIELDS`。如果 missing 一直空但 confirm 仍不推进，看 Phoenix admittance reason |
+| `re_spec_failed` | spec 没在预算内完整化、或 confirm 拒绝推进 | 看 `re_finalize.phase_seq` 里每条的 `missing` + `re_finalize.ui_fill.errors`：UI fill 报 label/selector 找不到 → 面板 DOM 改了，跑 `dump_panel_doms.py` 重核；UI fill 成功但 backend missing 仍非空 → 该字段不是通过这个 input 写入的，扩 `RE_REQUIRED_SPEC_FIELDS` + `fill_re_spec_via_ui` 的 JS 映射。如果 missing 一直空但 confirm 仍不推进，看 Phoenix admittance reason |
 | `re_submit_failed` | submit_re_params 内部抛异常 | 多半是 `瓶 1` locator 找不到——面板没渲到 add-flask 步，回头查为什么 confirm 没真推进 backend |
 | `blocked` + `dispatch_gated=True` | 没 `--allow-dispatch` | 正常 |
 | `cc_spec_violation` 非 None | `column_type` 在 CC 终态不是 `silica_12g` | 产品 bug（guide §4.3 硬规） |

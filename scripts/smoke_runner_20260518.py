@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from datetime import datetime, timezone
@@ -655,18 +656,19 @@ def _spec_missing(spec):
     return out
 
 
-def _compose_re_supplement(missing):
-    """Compose a SHORT follow-up message supplying only the missing spec
-    fields. Used when re_agent is already in collecting_spec but the spec
-    has nulls — we don't re-send the full startup nudge, just the gaps."""
-    parts = []
-    if "volume_ml" in missing:
-        parts.append("合并液体积约 200 ml")
-    if "solvents" in missing or "solvent_ratio" in missing:
-        parts.append("溶剂体系 PE 和 EA，比例 PE:EA = 1:1")
-    if not parts:
-        return ""
-    return "补充旋蒸 spec：" + "，".join(parts) + "。请据此更新参数推荐。"
+# NOTE: `_compose_re_supplement` was removed 2026-05-21 after the volume_ml
+# silent-reject case (conv-008) revealed chat-based supplements are unreliable
+# — they may be filtered by admittance and never reach the spec. RE spec gaps
+# are now filled deterministically via panel UI inputs; see
+# `talos_panel_ui.fill_re_spec_via_ui` and `_drive_re_after_cc` below.
+
+
+# RE spec defaults used by the UI-fill fallback. Volume is per-run random in
+# 100-300 mL (see _drive_re_after_cc). Solvent system defaults to PE/EA 1:1 —
+# this matches the most common brief and is overridden if a future brief
+# carries different chemistry.
+RE_DEFAULT_SOLVENTS = ["PE", "EA"]
+RE_DEFAULT_RATIOS = [1.0, 1.0]
 
 
 def _cc_task_phase(session_id):
@@ -678,7 +680,7 @@ def _cc_task_phase(session_id):
     return None
 
 
-def _compose_re_nudge(brief):
+def _compose_re_nudge(brief, volume_ml: int):
     """Compose a fully-articulated RE startup prompt from brief context.
 
     Why each piece matters (verified empirically 2026-05-20):
@@ -690,6 +692,10 @@ def _compose_re_nudge(brief):
       - volume + container type: avoids agent asking follow-up questions
         ("装在什么瓶里？") that stall re_phase at not_started.
       - thermal stability: avoids agent asking for thermal constraints.
+
+    `volume_ml` is randomized per run (100-300) so we exercise different
+    panel values; the same number is later used as the UI-fill fallback
+    if the agent's spec ends up with volume_ml=null.
     """
     scene = (brief.get("scene") or "")
     thermal = "化合物热稳定性正常，没有分解温度约束。"
@@ -698,7 +704,7 @@ def _compose_re_nudge(brief):
     return (
         "好的，过柱完成，开始旋蒸。"
         f"{thermal}"
-        "合并液约 200 ml，体系是 PE 和 EA，比例 PE:EA = 1:1，装在 250 ml 茄形瓶里。"
+        f"合并液约 {volume_ml} ml，体系是 PE 和 EA，比例 PE:EA = 1:1，装在 250 ml 茄形瓶里。"
         "请生成旋蒸执行参数推荐（水浴温度、压力梯度），我会在右侧面板确认。"
     )
 
@@ -720,28 +726,32 @@ def _wait_chat_ready(page, session_id, timeout=120):
 
 
 def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
-    """Spec-driven RE finalize.
+    """RE finalize: engage agent, then deterministically fill any missing
+    spec fields via panel UI inputs (NOT chat supplements).
 
-    Reads (phase, spec) in a closed loop and reacts to what's actually
-    missing, instead of trusting a one-shot startup nudge to cover every
-    required field. Replaces the older "send nudge once iff phase==not_started"
-    design that silently failed when brief turns dragged phase past
-    not_started with an incomplete spec (e.g. conv-008 with volume_ml=null:
-    nudge skipped, confirm clicks silently rejected, run ends re_spec_failed).
+    Why UI fill instead of chat: the chat-based supplement approach we tried
+    on 2026-05-21 (conv-008 retry) failed — bare "补充 spec：xxx" messages
+    were filtered by Talos admittance and the agent never wrote the value
+    into `spec.volume_ml`. Direct DOM manipulation of the panel inputs
+    bypasses admittance entirely and is deterministic. The RE spec panel
+    exposes:
+      - 溶剂体积 (mL): single `<input type=number>` (label-anchored)
+      - solvent table: `<select>` + ratio `<input>` per row, with `+ 添加溶剂`
+        to add new rows
+    See `talos_panel_ui.fill_re_spec_via_ui` (and the 2026-05-21 panel-DOM
+    capture under `eval_outputs/panel_doms_*/`) for the exact selectors.
 
-    State machine:
-      A. engage agent — if phase in (None, not_started), send full nudge,
-         wait for phase to leave not_started.
-      B. complete spec — while phase==collecting_spec with missing fields,
-         send a short field-targeted supplement (only the missing pieces),
-         re-poll until spec is complete or 3 supplements have been tried.
-      C. confirm spec — call confirm_re_spec_via_ui (only with spec
-         complete, so panel clicks actually advance backend).
-      D. dispatch gate — if --allow-dispatch, submit final params.
-
-    Returns a log dict for diagnostics; every phase/spec observation is
-    appended to phase_seq, and every chat message we sent is in
-    messages_sent (kind ∈ {nudge, supplement}).
+    Flow:
+      A. engage agent — if phase in (None, not_started), send full nudge
+         (random 100-300 mL volume in the wording) and wait for phase to
+         leave not_started.
+      B. wait briefly (~15s) for agent to populate spec from chat context.
+      C. read spec — for each RE_REQUIRED_SPEC_FIELDS still null, fill via
+         panel UI (volume_ml -> the random number from A; solvents/ratio ->
+         RE_DEFAULT_*). Verify spec became complete via API.
+      D. confirm spec via UI (clicks the panel 确认 button, advances backend
+         to collecting_params).
+      E. dispatch gate — if --allow-dispatch, submit final params.
     """
     rec = {"phase_seq": [], "messages_sent": []}
 
@@ -750,7 +760,6 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
         spec = _re_task_spec(session_id)
         missing = _spec_missing(spec)
         prev = rec["phase_seq"][-1] if rec["phase_seq"] else None
-        # Dedup: only append when phase, missing-set, or tag changes.
         if (not prev or prev.get("phase") != ph
                 or prev.get("missing") != missing
                 or prev.get("at") != tag):
@@ -759,6 +768,12 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
                 "missing": missing, "spec": spec,
             })
         return ph, spec, missing
+
+    # Per-run random volume used both in the nudge text and as the UI-fill
+    # value if spec.volume_ml ends up null. Same number both places so the
+    # conversation transcript and the panel agree.
+    volume_ml = random.randint(100, 300)
+    rec["volume_ml_choice"] = volume_ml
 
     log("  [re-finalize] start")
     if not _wait_chat_ready(page, session_id, timeout=120):
@@ -769,8 +784,9 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
     ph, spec, missing = record("pre_engage")
     rec["nudge_sent"] = False
     if ph in (None, "not_started"):
-        nudge = _compose_re_nudge(brief)
-        log(f"  [re-finalize] phase={ph}; sending full nudge: {nudge[:80]}...")
+        nudge = _compose_re_nudge(brief, volume_ml)
+        log(f"  [re-finalize] phase={ph}, volume_choice={volume_ml}; "
+            f"sending full nudge: {nudge[:80]}...")
         try:
             send_chat(page, nudge)
             rec["nudge_sent"] = True
@@ -781,7 +797,6 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
             rec["nudge_error"] = str(exc)
             rec["final_stage"] = "re_spec_failed"
             return rec
-        # Wait for phase to leave not_started.
         engage_deadline = time.time() + 180
         while time.time() < engage_deadline:
             time.sleep(6)
@@ -795,64 +810,62 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
     else:
         log(f"  [re-finalize] phase={ph} already past not_started; skipping nudge")
 
-    # ---- Phase B: complete the spec -------------------------------------
-    # Send field-targeted supplements until spec has no nulls in
-    # RE_REQUIRED_SPEC_FIELDS, or we give up after MAX_SUPPLEMENTS attempts.
-    MAX_SUPPLEMENTS = 3
-    supplements_sent = 0
-    spec_deadline = time.time() + 300
-    while time.time() < spec_deadline:
-        ph, spec, missing = record("spec_check")
-        if ph == "collecting_params":
-            log(f"  [re-finalize] phase={ph}; already past collecting_spec")
+    # ---- Phase B: brief grace for agent to populate spec ---------------
+    # If agent ingests the nudge / brief turns fast, spec may already be
+    # complete; if not, give it 15s before deciding to UI-fill.
+    log("  [re-finalize] waiting 15s for agent to populate spec from chat...")
+    grace_deadline = time.time() + 15
+    while time.time() < grace_deadline:
+        time.sleep(3)
+        ph, spec, missing = record("waiting_spec_natural")
+        if ph == "collecting_params" or (ph == "collecting_spec" and not missing):
             break
-        if ph == "collecting_spec" and not missing:
-            log(f"  [re-finalize] phase={ph} with complete spec={spec}")
-            break
-        if ph == "collecting_spec" and missing:
-            if supplements_sent >= MAX_SUPPLEMENTS:
-                log(f"  [re-finalize] giving up after {MAX_SUPPLEMENTS} supplements; "
-                    f"missing still={missing} spec={spec}")
-                rec["final_stage"] = "re_spec_failed"
-                rec["missing_at_giveup"] = missing
-                rec["spec_at_giveup"] = spec
-                return rec
-            supp = _compose_re_supplement(missing)
-            if not supp:
-                log(f"  [re-finalize] no supplement template for missing={missing}; "
-                    f"extend _compose_re_supplement and RE_REQUIRED_SPEC_FIELDS")
-                rec["final_stage"] = "re_spec_failed"
-                rec["missing_at_giveup"] = missing
-                return rec
-            supplements_sent += 1
-            log(f"  [re-finalize] missing={missing}; supplement #{supplements_sent}: {supp}")
-            try:
-                send_chat(page, supp)
-                rec["messages_sent"].append({
-                    "kind": "supplement",
-                    "missing": list(missing),
-                    "text": supp,
-                })
-            except Exception as exc:
-                log(f"  [re-finalize] supplement send failed: {exc}")
-                rec["final_stage"] = "re_spec_failed"
-                rec["error"] = str(exc)
-                return rec
-            # Give the agent time to update spec before re-polling.
-            time.sleep(15)
-            continue
-        # phase still transitioning (e.g. briefly not_started after engage);
-        # just poll again.
-        time.sleep(6)
+
+    # ---- Phase C: deterministic UI fill for any remaining missing fields
+    ph, spec, missing = record("pre_ui_fill")
+    if ph == "collecting_params":
+        log(f"  [re-finalize] phase={ph}; spec already past collecting_spec")
+    elif ph == "collecting_spec" and not missing:
+        log(f"  [re-finalize] spec complete via chat; spec={spec}")
+    elif ph == "collecting_spec" and missing:
+        log(f"  [re-finalize] phase={ph} with missing={missing}; "
+            f"filling via panel UI (volume={volume_ml}, "
+            f"solvents={RE_DEFAULT_SOLVENTS}, ratios={RE_DEFAULT_RATIOS})")
+        fill_kwargs = {}
+        if "volume_ml" in missing:
+            fill_kwargs["volume_ml"] = volume_ml
+        if "solvents" in missing or "solvent_ratio" in missing:
+            fill_kwargs["solvents"] = list(RE_DEFAULT_SOLVENTS)
+            fill_kwargs["ratios"] = list(RE_DEFAULT_RATIOS)
+        from talos_panel_ui import fill_re_spec_via_ui
+        ui_result = fill_re_spec_via_ui(page, **fill_kwargs)
+        rec["ui_fill"] = ui_result
+        if not ui_result.get("ok"):
+            log(f"  [re-finalize] UI fill failed: {ui_result.get('errors')}")
+            rec["final_stage"] = "re_spec_failed"
+            rec["missing_at_giveup"] = missing
+            rec["spec_at_giveup"] = spec
+            return rec
+        # Verify spec actually became complete on the backend side.
+        verify_deadline = time.time() + 30
+        while time.time() < verify_deadline:
+            ph, spec, missing = record("post_ui_fill")
+            if (ph == "collecting_params") or (ph == "collecting_spec" and not missing):
+                break
+            time.sleep(3)
+        else:
+            log(f"  [re-finalize] UI fill did not propagate to backend spec; "
+                f"missing still={missing} spec={spec}")
+            rec["final_stage"] = "re_spec_failed"
+            rec["missing_at_giveup"] = missing
+            rec["spec_at_giveup"] = spec
+            return rec
     else:
-        log("  [re-finalize] TIMEOUT waiting for complete spec")
-        ph, spec, missing = record("timeout_spec")
+        log(f"  [re-finalize] unexpected phase={ph}; treating as failure")
         rec["final_stage"] = "re_spec_failed"
-        rec["missing_at_timeout"] = missing
-        rec["spec_at_timeout"] = spec
         return rec
 
-    # ---- Phase C: confirm spec via UI -----------------------------------
+    # ---- Phase D: confirm spec via UI -----------------------------------
     from talos_panel_ui import confirm_re_spec_via_ui
     ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
     record("post_confirm_spec")
@@ -863,13 +876,12 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
     rec["reached_collecting_params"] = True
     rec["final_stage"] = "re_submit"
 
-    # ---- Phase D: dispatch gate -----------------------------------------
+    # ---- Phase E: dispatch gate -----------------------------------------
     if not args.allow_dispatch:
         log("  [re-finalize] dispatch gated (no --allow-dispatch) — stopping at collecting_params")
         rec["dispatch_gated"] = True
         return rec
 
-    # Submit final params (add flask, paint tubes, click confirm).
     from talos_panel_ui import submit_re_params_via_ui
     if submit_re_params_via_ui(page):
         rec["submitted_re"] = True

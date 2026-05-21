@@ -1,0 +1,32 @@
+{
+  "phase": "cc_spec",
+  "session_id": "576dc5cb-5b22-4161-a3b7-67aa8d27b3f9",
+  "captured_at": "2026-05-21T14:54:58.047325",
+  "cc_phase": "collecting_spec",
+  "re_phase": null,
+  "re_spec": {},
+  "active_card_text_snippet": "过柱参数预填\nTLC 信息\n上传 TLC 板图片并识别 Rf 值\n点击打开识别面板\nTLC 图片识别\nTLC 板图片\n拖拽 TLC 板图片到此处，或点击上传\n支持 JPG、PNG 格式，最大 10MB\n产物参照 (PMC)\n原料参照 (SMC)\n识别 Rf 值\nRF 值列表\n1\n添加 Rf 值\n取消\n确认\n溶剂信息\n#\t溶剂\t比例\t\n1\t\nPE 石油醚\nEA 乙酸乙酯\nDCM 二氯甲烷\nMeOH 甲醇\n\t\tX\n2\t\nPE 石油醚\nEA 乙酸乙酯\nDCM 二氯甲烷\nMeOH 甲醇\n\t\tX\n+ 添加溶剂\n样品信息\n样品量 (g)\n确认",
+  "modal_text_snippet": "TLC 图片识别\nTLC 板图片\n拖拽 TLC 板图片到此处，或点击上传\n支持 JPG、PNG 格式，最大 10MB\n产物参照 (PMC)\n原料参照 (SMC)\n识别 Rf 值\nRF 值列表\n1\n添加 Rf 值\n取消\n确认",
+  "tasks": [
+    {
+      "task_type": "cc_agent",
+      "phase": "collecting_spec",
+      "spec": {
+        "solvents": [
+          "PE",
+          "EA"
+        ],
+        "rf_values": [
+          0.35
+        ],
+        "solvent_ratio": [
+          3,
+          1
+        ],
+        "tlc_image_url": null,
+        "sample_amount_g": 0.2
+      },
+      "params": null
+    }
+  ]
+}
