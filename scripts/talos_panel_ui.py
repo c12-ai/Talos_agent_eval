@@ -534,122 +534,25 @@ def _re_final_panel_visible(page) -> bool:
 # updates if we just assign `.value` directly.
 # ---------------------------------------------------------------------------
 
-_RE_SPEC_FILL_JS = r"""
-(args) => {
-  const { volume_ml, solvents, ratios } = args;
-  const out = {volume_filled: false, rows_filled: 0, errors: [], diag: {}};
-
-  const setInputValue = (el, val) => {
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, 'value').set;
-    setter.call(el, String(val));
-    el.dispatchEvent(new Event('input', {bubbles: true}));
-    el.dispatchEvent(new Event('change', {bubbles: true}));
-  };
-  const setSelectValue = (el, val) => {
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLSelectElement.prototype, 'value').set;
-    setter.call(el, String(val));
-    el.dispatchEvent(new Event('input', {bubbles: true}));
-    el.dispatchEvent(new Event('change', {bubbles: true}));
-  };
-
-  // Active step card; fall back to whole doc if no .step-card-active present.
+_RE_SPEC_DIAG_JS = r"""
+() => {
   const activeCard = document.querySelector('.step-card-active');
-  out.diag.has_step_card_active = !!activeCard;
-
-  // Locate "溶剂信息" card. Try active card first, then any '.card-section'
-  // whose title text includes '溶剂信息' (loose match — tolerates colons,
-  // extra whitespace, future label tweaks).
-  const allTitles = Array.from(
-    (activeCard || document).querySelectorAll('.card-section-title'));
-  out.diag.titles_in_scope = allTitles.map(t => (t.textContent || '').trim().slice(0, 30));
-  const title = allTitles.find(e => /溶剂信息/.test((e.textContent || '').trim()));
-  const card = title ? (title.closest('.card-section') || title.parentElement) : null;
-  out.diag.card_found = !!card;
-
-  // Where to search for the volume input. Prefer the 溶剂信息 card; if not
-  // found, search the whole active card (or document) so we still have a
-  // shot at the volume input via min="2" fallback below.
-  const searchRoot = card || activeCard || document;
-
-  // ---- Fill volume_ml -------------------------------------------------
-  if (volume_ml !== null && volume_ml !== undefined) {
-    let input = null;
-    let foundBy = null;
-
-    // Strategy 1: <label> whose text mentions 体积 (loose; tolerates
-    // '溶剂体积 (mL)', '溶剂总体积 (ml)', spacing variants, etc.).
-    const labels = Array.from(searchRoot.querySelectorAll('label'));
-    for (const l of labels) {
-      const txt = (l.textContent || '').trim();
-      if (/体积/.test(txt)) {
-        const container = l.closest('.field-v6') || l.parentElement;
-        const cand = container && container.querySelector('input[type=number]');
-        if (cand) { input = cand; foundBy = 'label_text:' + txt.slice(0, 24); break; }
-      }
-    }
-
-    // Strategy 2: min="2" attribute (unique to the volume input in the
-    // current RE spec panel; ratio inputs in solvent rows don't have it).
-    if (!input) {
-      const cand = searchRoot.querySelector('input[type=number][min="2"]')
-        || (activeCard && activeCard.querySelector('input[type=number][min="2"]'))
-        || document.querySelector('.step-card-active input[type=number][min="2"]');
-      if (cand) { input = cand; foundBy = 'min=2 selector'; }
-    }
-
-    if (!input) {
-      // Dump every visible number input in the active card so the caller
-      // can see what's actually rendered.
-      const dumpRoot = activeCard || document;
-      out.diag.number_inputs = Array.from(
-        dumpRoot.querySelectorAll('input[type=number]')
-      ).map(i => {
-        const r = i.getBoundingClientRect();
-        return {
-          min: i.min, max: i.max, step: i.step, value: i.value,
-          placeholder: i.placeholder,
-          label: (i.closest('.field-v6')?.querySelector('label')?.textContent || '').trim().slice(0, 40),
-          visible: r.width > 0 && r.height > 0,
-        };
-      });
-      out.errors.push('volume input not found (label-text and min=2 fallback both failed)');
-    } else {
-      setInputValue(input, volume_ml);
-      out.volume_filled = true;
-      out.volume_value = input.value;
-      out.diag.volume_found_by = foundBy;
-    }
+  if (!activeCard) {
+    return {has_step_card_active: false, number_inputs: []};
   }
-
-  // ---- Fill solvent rows (solvents + ratios in lockstep) -------------
-  if (solvents && ratios && solvents.length === ratios.length && solvents.length > 0) {
-    if (!card) {
-      out.errors.push('solvent rows: 溶剂信息 card not found');
-    } else {
-      const table = card.querySelector('table');
-      if (!table) {
-        out.errors.push('solvent table not found');
-      } else {
-        const realRows = () => Array.from(table.querySelectorAll('tbody tr')).filter(
-          tr => !(tr.textContent || '').includes('暂无溶剂数据'));
-        for (let i = 0; i < solvents.length; i++) {
-          const rows = realRows();
-          const tr = rows[i];
-          if (!tr) { out.errors.push(`row ${i} not present; click + 添加溶剂 first`); continue; }
-          const sel = tr.querySelector('select');
-          const inp = tr.querySelector('input[type=number]');
-          if (sel) setSelectValue(sel, solvents[i]);
-          else out.errors.push(`row ${i}: solvent select not found`);
-          if (inp) setInputValue(inp, ratios[i]);
-          else out.errors.push(`row ${i}: ratio input not found`);
-          out.rows_filled += 1;
-        }
-      }
-    }
-  }
-  return out;
+  const inputs = Array.from(activeCard.querySelectorAll('input[type=number]'));
+  return {
+    has_step_card_active: true,
+    number_inputs: inputs.map(i => {
+      const r = i.getBoundingClientRect();
+      return {
+        min: i.min, max: i.max, step: i.step, value: i.value,
+        placeholder: i.placeholder,
+        label: (i.closest('.field-v6')?.querySelector('label')?.textContent || '').trim().slice(0, 40),
+        visible: r.width > 0 && r.height > 0,
+      };
+    }),
+  };
 }
 """
 
@@ -657,8 +560,8 @@ _RE_SPEC_FILL_JS = r"""
 def _count_re_spec_solvent_rows(page) -> int:
     return page.evaluate(r"""() => {
       const titles = Array.from(document.querySelectorAll('.card-section-title'));
-      const title = titles.find(e => (e.textContent || '').trim() === '溶剂信息');
-      const card = title && title.closest('.card-section');
+      const title = titles.find(e => /溶剂信息/.test((e.textContent || '').trim()));
+      const card = title && (title.closest('.card-section') || title.parentElement);
       if (!card) return -1;
       const table = card.querySelector('table');
       if (!table) return -1;
@@ -667,9 +570,51 @@ def _count_re_spec_solvent_rows(page) -> int:
     }""")
 
 
+def _fill_via_keystrokes(page, locator, value, *, label_for_log: str) -> bool:
+    """Fill a React-controlled input by simulating real user keystrokes.
+
+    Why not native JS setter: React tracks last-seen input value via an
+    internal `_valueTracker`. If you set `.value` via the native
+    Object.getOwnPropertyDescriptor setter and dispatch an 'input' event,
+    React's tracker sees the value didn't "change from its perspective"
+    (because the tracker holds whatever it last committed, not the DOM's
+    current value) and skips onChange — so the backend never gets the
+    update. Conv-008 / 2026-05-21 hit exactly this: volume_value='288' in
+    the DOM but `spec.volume_ml` stayed null.
+
+    Playwright `.type()` simulates real keypress events, which React's
+    SyntheticEvent layer picks up correctly. We also tab/blur afterwards
+    to flush any onBlur handlers."""
+    try:
+        locator.wait_for(state="visible", timeout=8000)
+        locator.click()
+        time.sleep(0.15)
+        # Select-all, then type — typing over a selection replaces it
+        # (browser-native behavior). For number inputs this is more reliable
+        # than press('Delete'), which deletes one char to the right.
+        locator.press("ControlOrMeta+a")
+        time.sleep(0.05)
+        locator.type(str(value), delay=20)
+        time.sleep(0.2)
+        # Blur to commit any onBlur-only handlers.
+        page.keyboard.press("Tab")
+        time.sleep(0.3)
+        actual = locator.input_value()
+        print(f"[UI] {label_for_log} typed: '{actual}' (target {value})")
+        return True
+    except Exception as exc:
+        print(f"[UI] {label_for_log} type failed: {exc}")
+        return False
+
+
 def fill_re_spec_via_ui(page, *, volume_ml=None, solvents=None, ratios=None) -> dict:
     """Directly fill missing RE spec fields via panel inputs, bypassing chat
-    and agent admittance. Returns a result dict with what was filled.
+    and agent admittance.
+
+    Uses Playwright `.type()` (real keystrokes) — NOT native JS setter — so
+    React's internal value tracker sees the change and the frontend fires
+    onChange → backend spec actually updates. See `_fill_via_keystrokes`
+    for the why.
 
     Args:
       volume_ml: float | None — if set, fill the 溶剂体积 (mL) input.
@@ -684,47 +629,107 @@ def fill_re_spec_via_ui(page, *, volume_ml=None, solvents=None, ratios=None) -> 
     print(f"[UI] fill_re_spec_via_ui: volume_ml={volume_ml} "
           f"solvents={solvents} ratios={ratios}")
 
-    # Wait for the RE spec panel to actually render before reading its DOM.
-    # The active card may take a few seconds to update after the agent
-    # populates spec from chat.
+    result = {"ok": True, "errors": [], "diag": {}, "volume_filled": False,
+              "rows_filled": 0}
+
+    # Wait for the RE spec panel to actually render before touching DOM.
     try:
         page.locator(".step-card-active").first.wait_for(
             state="visible", timeout=15000)
     except Exception:
         print("[UI] fill_re_spec_via_ui: WARNING — no .step-card-active visible after 15s; "
-              "proceeding anyway with document-wide search")
+              "proceeding anyway")
 
-    # 1. Add solvent rows if needed (clicks must come from Playwright; the JS
-    #    fill below operates on the resulting DOM).
+    # ---- Add solvent rows if needed (Playwright clicks) ----------------
     if solvents:
         existing = _count_re_spec_solvent_rows(page)
         if existing < 0:
             print("[UI] fill_re_spec_via_ui: 溶剂信息 card / table not found")
-            return {"ok": False, "error": "溶剂信息 card not found"}
-        needed = max(0, len(solvents) - existing)
-        if needed:
-            print(f"[UI] fill_re_spec_via_ui: adding {needed} solvent row(s) "
-                  f"(existing={existing}, target={len(solvents)})")
-            for _ in range(needed):
-                try:
-                    btn = page.locator(
-                        ".step-card-active button:has-text('+ 添加溶剂')").first
-                    btn.click(timeout=3000)
-                    time.sleep(0.4)
-                except Exception as exc:
-                    print(f"[UI] fill_re_spec_via_ui: + 添加溶剂 click failed: {exc}")
-                    return {"ok": False, "error": f"+ 添加溶剂 click failed: {exc}"}
+            result["errors"].append("溶剂信息 card not found")
+            result["ok"] = False
+        else:
+            needed = max(0, len(solvents) - existing)
+            if needed:
+                print(f"[UI] fill_re_spec_via_ui: adding {needed} solvent row(s) "
+                      f"(existing={existing}, target={len(solvents)})")
+                for _ in range(needed):
+                    try:
+                        btn = page.locator(
+                            ".step-card-active button:has-text('+ 添加溶剂')").first
+                        btn.click(timeout=3000)
+                        time.sleep(0.4)
+                    except Exception as exc:
+                        print(f"[UI] + 添加溶剂 click failed: {exc}")
+                        result["errors"].append(f"+ 添加溶剂 click failed: {exc}")
+                        result["ok"] = False
+                        return result
 
-    # 2. Apply values via JS (volume + per-row solvent/ratio in one shot).
-    result = page.evaluate(_RE_SPEC_FILL_JS, {
-        "volume_ml": volume_ml,
-        "solvents": solvents,
-        "ratios": ratios,
-    })
+    # ---- Fill volume_ml via real keystrokes ----------------------------
+    if volume_ml is not None and result["ok"]:
+        # Selector strategy: min="2" is unique to the volume input in the
+        # current RE spec panel (ratio inputs in solvent rows use min="1");
+        # confirmed via 2026-05-21 DOM captures for empty / no_volume / full
+        # states. Fall back to label-anchored locator if that misses.
+        vol_loc = page.locator(
+            ".step-card-active input[type='number'][min='2']").first
+        try:
+            vol_loc.wait_for(state="visible", timeout=5000)
+            found_by = "min=2 selector"
+        except Exception:
+            # Fallback: label whose text mentions 体积, then its sibling input.
+            vol_loc = page.locator(
+                ".step-card-active label:has-text('体积')").first.locator(
+                "xpath=following-sibling::input[@type='number'][1]")
+            try:
+                vol_loc.wait_for(state="visible", timeout=5000)
+                found_by = "label[体积] + sibling input"
+            except Exception:
+                # Final dump: caller can diagnose from the active card's
+                # number inputs.
+                diag = page.evaluate(_RE_SPEC_DIAG_JS)
+                result["diag"].update(diag)
+                result["errors"].append(
+                    "volume input not found (min=2 + label fallback both failed)")
+                result["ok"] = False
+                print(f"[UI] volume input not found; diag={diag}")
+                return result
+        if _fill_via_keystrokes(page, vol_loc, volume_ml, label_for_log="溶剂体积 (mL)"):
+            actual = vol_loc.input_value()
+            result["volume_filled"] = True
+            result["volume_value"] = actual
+            result["diag"]["volume_found_by"] = found_by
+        else:
+            result["errors"].append("volume keystroke fill threw exception")
+            result["ok"] = False
+
+    # ---- Fill solvent rows via Playwright (select + keystrokes) --------
+    if solvents and ratios and result["ok"]:
+        rows_loc = page.locator(
+            ".step-card-active table tbody tr.border-b").filter(
+            has_not_text="暂无溶剂数据")
+        row_count = rows_loc.count()
+        n = min(len(solvents), row_count)
+        for i in range(n):
+            row = rows_loc.nth(i)
+            try:
+                row.locator("select").first.select_option(solvents[i])
+                time.sleep(0.2)
+            except Exception as exc:
+                result["errors"].append(f"row {i} select_option({solvents[i]}) failed: {exc}")
+                continue
+            ratio_loc = row.locator("input[type='number']").first
+            if _fill_via_keystrokes(page, ratio_loc, ratios[i],
+                                     label_for_log=f"row{i} ratio"):
+                result["rows_filled"] += 1
+            else:
+                result["errors"].append(f"row {i} ratio keystroke fill failed")
+        if result["rows_filled"] < len(solvents):
+            print(f"[UI] WARN: filled {result['rows_filled']}/{len(solvents)} rows")
+
     result["ok"] = not result.get("errors")
     print(f"[UI] fill_re_spec_via_ui: result={result}")
-    # Brief pause for React state to settle before caller clicks 确认.
-    time.sleep(1.0)
+    # Brief pause for backend to receive the React-triggered onChange.
+    time.sleep(1.5)
     return result
 
 

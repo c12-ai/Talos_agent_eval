@@ -846,20 +846,28 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
             rec["missing_at_giveup"] = missing
             rec["spec_at_giveup"] = spec
             return rec
-        # Verify spec actually became complete on the backend side.
-        verify_deadline = time.time() + 30
+        # Poll backend for spec to catch up with the keystroke fill. With
+        # real keystrokes React fires onChange and the frontend posts the
+        # value to backend → spec usually updates within a few seconds. If
+        # 15s isn't enough we still proceed to confirm — confirm_re_spec_via_ui
+        # will be the final arbiter (and will tell us via re_spec_failed if
+        # backend still didn't pick it up).
+        verify_deadline = time.time() + 15
+        synced = False
         while time.time() < verify_deadline:
             ph, spec, missing = record("post_ui_fill")
             if (ph == "collecting_params") or (ph == "collecting_spec" and not missing):
+                synced = True
+                log(f"  [re-finalize] UI fill propagated to backend; spec={spec}")
                 break
             time.sleep(3)
-        else:
-            log(f"  [re-finalize] UI fill did not propagate to backend spec; "
-                f"missing still={missing} spec={spec}")
-            rec["final_stage"] = "re_spec_failed"
-            rec["missing_at_giveup"] = missing
-            rec["spec_at_giveup"] = spec
-            return rec
+        if not synced:
+            ph, spec, missing = record("post_ui_fill_timeout")
+            log(f"  [re-finalize] WARN: UI fill did not propagate to backend "
+                f"within 15s — proceeding to confirm anyway. missing={missing} "
+                f"spec={spec}")
+            rec["ui_fill_propagation_timeout"] = True
+            rec["spec_after_ui_fill"] = spec
     else:
         log(f"  [re-finalize] unexpected phase={ph}; treating as failure")
         rec["final_stage"] = "re_spec_failed"

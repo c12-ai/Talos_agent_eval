@@ -86,10 +86,12 @@ CLI args:
 4. **缺失 spec 字段用 UI 直填，不靠 chat**。`_drive_re_after_cc` 现在是：
    - **A.** phase 在 `not_started` 时发一次 startup nudge（`_compose_re_nudge`，体积是 100-300 mL 之间的 per-run 随机值），把 agent 推进到 `collecting_spec`
    - **B.** 等 15s 让 agent 自己把 spec 从聊天上下文填齐
-   - **C.** 仍有 missing 字段时调 `talos_panel_ui.fill_re_spec_via_ui`，**直接往面板的 `溶剂体积 (mL)` input、溶剂表 `<select>` + 比例 `<input>` 写值（React native setter + dispatch input/change events）**，绕开 admittance。然后轮询 30s 确认 backend spec 真的更新了。
+   - **C.** 仍有 missing 字段时调 `talos_panel_ui.fill_re_spec_via_ui`，**用 Playwright `.type()` 模拟真键盘输入（不是 JS 直接 `el.value = ...`）**往面板 input 写值；溶剂表用 `select_option` + 真键盘。轮询 15s 看 backend spec 是否同步，**不同步也继续走到 confirm**（仅打 WARN）。
    - **D.** 点 `确认` 推进到 `collecting_params`（仍用 `confirm_re_spec_via_ui`）。
 
-   **为什么不再用 chat 兜底**：2026-05-21 conv-008 retry 实测，bare "补充 spec：合并液 200 ml" 这种短消息被 admittance 过滤、agent 完全没把值写进 spec，连发两次都不动。UI 直填是确定性路径，跟 agent 的 LLM 不确定性彻底解耦。
+   **为什么不再用 chat 兜底**：2026-05-21 conv-008 第一次 retry 实测，bare "补充 spec：合并液 200 ml" 这种短消息被 admittance 过滤、agent 完全没把值写进 spec。UI 直填是确定性路径，跟 agent 的 LLM 不确定性彻底解耦。
+
+   **为什么用 `.type()` 而不是 JS 直接设 `value`**：React 控制的 input 有内部 `_valueTracker` 记录"上次提交的值"。JS 直接 `setter.call(el, x)` 改了 DOM `value`，再 dispatch input 事件——React 比较 `el.value === tracker.value` 发现"看起来没变"（因为 tracker 才是 React 的真值），**跳过 onChange，前端不发 API 给 backend**。2026-05-21 conv-008 第二次 retry 实测：`volume_value='288'` 写到 DOM 里了，但 `spec.volume_ml` 一直 null。Playwright `.type()` 模拟真键盘事件，React SyntheticEvent 层正常拿到，onChange 触发，backend 真更新。同理 `.select_option()` 也走真选择路径。
 5. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 走 UI-fill 流程，省下白点 180s。
 6. **面板 DOM 是已知量**：`scripts/dump_panel_doms.py` 跑一遍能扒出 cc_spec / cc_params / re_spec / re_params 四个面板的全部可编辑控件（label / cssPath / value / readonly）。再加新的 UI 直填字段前先用它复核当前 DOM；产物在 `eval_outputs/panel_doms_*/summary.md`。这条脚本不消耗 lab。
 
