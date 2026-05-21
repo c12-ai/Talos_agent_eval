@@ -445,21 +445,34 @@ def run_conv(brief, browser, args):
                 log(f"  [GUARD] §4.3 column_type post-submit (transient): {ct}")
 
         elif (stage == "re_spec" and (params_given or is_ccre)
-              and any(x in bt for x in ["旋蒸参数", "溶剂体系", "水浴温度", "压力梯度"])
-              and _re_task_phase(session_id)[0] in ("collecting_spec", "collecting_params")):
+              and any(x in bt for x in ["旋蒸参数", "溶剂体系", "水浴温度", "压力梯度"])):
             # Gate the in-loop trigger on workflow-state too: CC summary cards
             # leak "溶剂体系" into body text after CC completes, which used to
             # fire this branch prematurely (re_agent still not_started ->
-            # confirm_re_spec wastes 180s clicking nothing). The API check
-            # ensures we only confirm when the agent has actually produced a
-            # spec.
-            from talos_panel_ui import confirm_re_spec_via_ui
-            ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
-            if ok:
-                rec["panel_action"] = "confirm_re_spec"; stage = "re_submit"
+            # confirm_re_spec wastes 180s clicking nothing). Now also gate on
+            # spec completeness: if any RE_REQUIRED_SPEC_FIELDS is null, panel
+            # 确认 silently rejects (conv-008 / volume_ml=null case) — defer
+            # to post-loop _drive_re_after_cc which handles supplements.
+            ph_now, _ = _re_task_phase(session_id)
+            spec_now = _re_task_spec(session_id)
+            missing_now = _spec_missing(spec_now)
+            spec_ready = (ph_now == "collecting_params") or (
+                ph_now == "collecting_spec" and not missing_now
+            )
+            if not spec_ready:
+                log(f"  [re-spec] in-loop skipped: phase={ph_now} "
+                    f"missing={missing_now} → post-loop will drive")
+                rec["panel_action"] = "confirm_re_spec_DEFERRED"
+                rec["re_spec_phase"] = ph_now
+                rec["re_spec_missing"] = missing_now
             else:
-                rec["panel_action"] = "confirm_re_spec_TIMEOUT"
-                log("  [panel] RE spec confirm timed out in-loop — post-loop finalize will retry")
+                from talos_panel_ui import confirm_re_spec_via_ui
+                ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
+                if ok:
+                    rec["panel_action"] = "confirm_re_spec"; stage = "re_submit"
+                else:
+                    rec["panel_action"] = "confirm_re_spec_TIMEOUT"
+                    log("  [panel] RE spec confirm timed out in-loop — post-loop finalize will retry")
 
         elif stage == "re_submit" and dispatch_intent(ut) and _re_button_visible(page):
             if not args.allow_dispatch:
@@ -601,12 +614,59 @@ def _wait_lab_terminal(session_id, want=None, timeout=1200):
 # RE post-loop drive (state-machine driven; survives live agent variance)
 # ---------------------------------------------------------------------------
 
-def _re_task_phase(session_id):
-    """Return (phase, run_status) for the re_agent task, or (None, None)."""
+def _re_task(session_id):
+    """Return the re_agent task dict (or {}), so callers can read phase/spec
+    together without round-tripping the API multiple times."""
     for t in (api_workflow_state(session_id).get("tasks") or []):
         if "re" in (t.get("task_type") or ""):
-            return t.get("phase"), (t.get("latest_run") or {}).get("status")
-    return None, None
+            return t
+    return {}
+
+
+def _re_task_phase(session_id):
+    """Return (phase, run_status) for the re_agent task, or (None, None)."""
+    t = _re_task(session_id)
+    if not t:
+        return None, None
+    return t.get("phase"), (t.get("latest_run") or {}).get("status")
+
+
+def _re_task_spec(session_id):
+    """Return the re_agent task spec dict (or {})."""
+    return _re_task(session_id).get("spec") or {}
+
+
+# Fields that must be non-null in re_agent.spec before the panel 确认 will
+# actually advance backend to collecting_params. Confirmed empirically:
+#   - solvent_ratio=null  → silent reject (SMOKE_README §80, ratio-null case)
+#   - volume_ml=null      → silent reject (2026-05-21 conv-008 case)
+#   - solvents=null/empty → same shape; included for safety
+# If you discover another null-field silent-reject, add it here.
+RE_REQUIRED_SPEC_FIELDS = ("solvents", "solvent_ratio", "volume_ml")
+
+
+def _spec_missing(spec):
+    """Return list of RE_REQUIRED_SPEC_FIELDS that are absent / null / empty."""
+    out = []
+    for k in RE_REQUIRED_SPEC_FIELDS:
+        v = spec.get(k)
+        if v is None or v == [] or v == {} or v == "":
+            out.append(k)
+    return out
+
+
+def _compose_re_supplement(missing):
+    """Compose a SHORT follow-up message supplying only the missing spec
+    fields. Used when re_agent is already in collecting_spec but the spec
+    has nulls — we don't re-send the full startup nudge, just the gaps."""
+    parts = []
+    if "volume_ml" in missing:
+        parts.append("合并液体积约 200 ml")
+    if "solvents" in missing or "solvent_ratio" in missing:
+        parts.append("溶剂体系 PE 和 EA，比例 PE:EA = 1:1")
+    if not parts:
+        return ""
+    return "补充旋蒸 spec：" + "，".join(parts) + "。请据此更新参数推荐。"
 
 
 def _cc_task_phase(session_id):
@@ -660,70 +720,142 @@ def _wait_chat_ready(page, session_id, timeout=120):
 
 
 def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
-    """State-machine driven RE finalize.
+    """Spec-driven RE finalize.
 
-    Sequence:
-      1. wait for chat textarea ready
-      2. if re_phase == not_started: send articulated startup prompt
-      3. wait for re_phase == collecting_spec (≤240s)
-      4. call confirm_re_spec_via_ui (state-driven, advances to
-         collecting_params with chat fallback)
-      5. if --allow-dispatch: call submit_re_params_via_ui, wait terminal
-         else: stop (dispatch_gated)
+    Reads (phase, spec) in a closed loop and reacts to what's actually
+    missing, instead of trusting a one-shot startup nudge to cover every
+    required field. Replaces the older "send nudge once iff phase==not_started"
+    design that silently failed when brief turns dragged phase past
+    not_started with an incomplete spec (e.g. conv-008 with volume_ml=null:
+    nudge skipped, confirm clicks silently rejected, run ends re_spec_failed).
 
-    Returns a log dict so the caller can attach it to the conv output JSON
-    for diagnostics.
+    State machine:
+      A. engage agent — if phase in (None, not_started), send full nudge,
+         wait for phase to leave not_started.
+      B. complete spec — while phase==collecting_spec with missing fields,
+         send a short field-targeted supplement (only the missing pieces),
+         re-poll until spec is complete or 3 supplements have been tried.
+      C. confirm spec — call confirm_re_spec_via_ui (only with spec
+         complete, so panel clicks actually advance backend).
+      D. dispatch gate — if --allow-dispatch, submit final params.
+
+    Returns a log dict for diagnostics; every phase/spec observation is
+    appended to phase_seq, and every chat message we sent is in
+    messages_sent (kind ∈ {nudge, supplement}).
     """
-    rec = {"phase_seq": []}
+    rec = {"phase_seq": [], "messages_sent": []}
 
-    def record_phase(tag):
+    def record(tag):
         ph, st_ = _re_task_phase(session_id)
-        # Dedup: only record when phase or stage tag changes.
+        spec = _re_task_spec(session_id)
+        missing = _spec_missing(spec)
         prev = rec["phase_seq"][-1] if rec["phase_seq"] else None
-        if not prev or prev.get("phase") != ph or prev.get("at") != tag:
-            rec["phase_seq"].append({"at": tag, "phase": ph, "run_status": st_})
-        return ph
+        # Dedup: only append when phase, missing-set, or tag changes.
+        if (not prev or prev.get("phase") != ph
+                or prev.get("missing") != missing
+                or prev.get("at") != tag):
+            rec["phase_seq"].append({
+                "at": tag, "phase": ph, "run_status": st_,
+                "missing": missing, "spec": spec,
+            })
+        return ph, spec, missing
 
     log("  [re-finalize] start")
     if not _wait_chat_ready(page, session_id, timeout=120):
         log("  [re-finalize] WARNING: chat textarea never went enabled")
-    record_phase("start")
+    record("start")
 
-    ph = record_phase("pre_nudge")
+    # ---- Phase A: engage agent ------------------------------------------
+    ph, spec, missing = record("pre_engage")
+    rec["nudge_sent"] = False
     if ph in (None, "not_started"):
         nudge = _compose_re_nudge(brief)
-        log(f"  [re-finalize] sending RE startup prompt: {nudge[:80]}...")
+        log(f"  [re-finalize] phase={ph}; sending full nudge: {nudge[:80]}...")
         try:
             send_chat(page, nudge)
             rec["nudge_sent"] = True
             rec["nudge_text"] = nudge
+            rec["messages_sent"].append({"kind": "nudge", "text": nudge})
         except Exception as exc:
             log(f"  [re-finalize] nudge send failed: {exc}")
             rec["nudge_error"] = str(exc)
             rec["final_stage"] = "re_spec_failed"
             return rec
+        # Wait for phase to leave not_started.
+        engage_deadline = time.time() + 180
+        while time.time() < engage_deadline:
+            time.sleep(6)
+            ph, spec, missing = record("waiting_engage")
+            if ph in ("collecting_spec", "collecting_params"):
+                break
+        else:
+            log("  [re-finalize] TIMEOUT engaging agent (phase still not_started)")
+            rec["final_stage"] = "re_spec_failed"
+            return rec
     else:
-        rec["nudge_sent"] = False
-        log(f"  [re-finalize] re_phase already {ph}, skipping nudge")
+        log(f"  [re-finalize] phase={ph} already past not_started; skipping nudge")
 
-    # Wait for collecting_spec.
-    log("  [re-finalize] waiting for re_phase=collecting_spec (≤240s)...")
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        time.sleep(6)
-        ph = record_phase("waiting_spec")
-        if ph in ("collecting_spec", "collecting_params"):
-            log(f"  [re-finalize] re_phase reached {ph}")
+    # ---- Phase B: complete the spec -------------------------------------
+    # Send field-targeted supplements until spec has no nulls in
+    # RE_REQUIRED_SPEC_FIELDS, or we give up after MAX_SUPPLEMENTS attempts.
+    MAX_SUPPLEMENTS = 3
+    supplements_sent = 0
+    spec_deadline = time.time() + 300
+    while time.time() < spec_deadline:
+        ph, spec, missing = record("spec_check")
+        if ph == "collecting_params":
+            log(f"  [re-finalize] phase={ph}; already past collecting_spec")
             break
+        if ph == "collecting_spec" and not missing:
+            log(f"  [re-finalize] phase={ph} with complete spec={spec}")
+            break
+        if ph == "collecting_spec" and missing:
+            if supplements_sent >= MAX_SUPPLEMENTS:
+                log(f"  [re-finalize] giving up after {MAX_SUPPLEMENTS} supplements; "
+                    f"missing still={missing} spec={spec}")
+                rec["final_stage"] = "re_spec_failed"
+                rec["missing_at_giveup"] = missing
+                rec["spec_at_giveup"] = spec
+                return rec
+            supp = _compose_re_supplement(missing)
+            if not supp:
+                log(f"  [re-finalize] no supplement template for missing={missing}; "
+                    f"extend _compose_re_supplement and RE_REQUIRED_SPEC_FIELDS")
+                rec["final_stage"] = "re_spec_failed"
+                rec["missing_at_giveup"] = missing
+                return rec
+            supplements_sent += 1
+            log(f"  [re-finalize] missing={missing}; supplement #{supplements_sent}: {supp}")
+            try:
+                send_chat(page, supp)
+                rec["messages_sent"].append({
+                    "kind": "supplement",
+                    "missing": list(missing),
+                    "text": supp,
+                })
+            except Exception as exc:
+                log(f"  [re-finalize] supplement send failed: {exc}")
+                rec["final_stage"] = "re_spec_failed"
+                rec["error"] = str(exc)
+                return rec
+            # Give the agent time to update spec before re-polling.
+            time.sleep(15)
+            continue
+        # phase still transitioning (e.g. briefly not_started after engage);
+        # just poll again.
+        time.sleep(6)
     else:
-        log("  [re-finalize] TIMEOUT waiting for collecting_spec")
+        log("  [re-finalize] TIMEOUT waiting for complete spec")
+        ph, spec, missing = record("timeout_spec")
         rec["final_stage"] = "re_spec_failed"
+        rec["missing_at_timeout"] = missing
+        rec["spec_at_timeout"] = spec
         return rec
 
-    # Confirm RE spec via state-driven helper.
+    # ---- Phase C: confirm spec via UI -----------------------------------
     from talos_panel_ui import confirm_re_spec_via_ui
     ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
-    record_phase("post_confirm_spec")
+    record("post_confirm_spec")
     if not ok:
         log("  [re-finalize] confirm_re_spec_via_ui returned False")
         rec["final_stage"] = "re_spec_failed"
@@ -731,7 +863,7 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
     rec["reached_collecting_params"] = True
     rec["final_stage"] = "re_submit"
 
-    # Dispatch gate.
+    # ---- Phase D: dispatch gate -----------------------------------------
     if not args.allow_dispatch:
         log("  [re-finalize] dispatch gated (no --allow-dispatch) — stopping at collecting_params")
         rec["dispatch_gated"] = True
@@ -742,7 +874,7 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
     if submit_re_params_via_ui(page):
         rec["submitted_re"] = True
         submitted_tasks.append("re")
-        record_phase("post_submit_re")
+        record("post_submit_re")
         rec["final_stage"] = "re_wait"
     else:
         log("  [re-finalize] submit_re_params_via_ui FAILED")

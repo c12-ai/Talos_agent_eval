@@ -76,9 +76,20 @@ CLI args:
 ## 设计核心（改脚本前必读）
 
 1. **权威成功信号 = workflow-state API 的 `phase` 字段**，不是 DOM 关键字。`talos_re_frontend_runner.confirm_re_spec` 轮询 `re_agent.phase == 'collecting_params'`。改成纯 DOM 检查会回到 1120 那种假阳性陷阱。
-2. **brief 里的"热稳定性正常"/"下发"等短句驱不动 RE**——admittance 把它们当面板确认意图拒掉。Post-loop `_drive_re_after_cc` 自己合成一段完整 prompt 推 agent。
-3. **RE startup prompt 必须含 4 项**：意图（"做旋蒸"）+ 溶剂体系+比例（`PE:EA=1:1`）+ 体积+容器 + 热稳定性。少 ratio 是隐蔽 bug——agent 给的 `spec.solvent_ratio=null`，前端确认按钮可点但 backend 静默不推进。
-4. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate。
+2. **brief 里的"热稳定性正常"/"下发"等短句驱不动 RE**——admittance 把它们当面板确认意图拒掉。Post-loop `_drive_re_after_cc` 自己合成完整 prompt 推 agent。
+3. **`re_agent.spec` 任一必填字段为 null → 前端 confirm 静默被拒**（panel 点确认不报错但 backend 不推进到 `collecting_params`）。已知触发：
+   - `solvent_ratio=null`（brief 没给比例）
+   - `volume_ml=null`（brief 没给体积，2026-05-21 conv-008 案例）
+   - `solvents=null/empty`（同类）
+
+   `RE_REQUIRED_SPEC_FIELDS = ("solvents", "solvent_ratio", "volume_ml")`（见 `smoke_runner_20260518.py`）。再发现新的 null-字段静默拒 bug，扩这个常量和 `_compose_re_supplement` 即可。
+4. **`_drive_re_after_cc` 是 spec-driven 闭环**，不是「nudge 一次就完事」。每轮读 `(phase, spec)` → 算 `missing` → 缺什么发什么：
+   - `phase=not_started` → 发完整 nudge（`_compose_re_nudge`）
+   - `phase=collecting_spec` 且有 missing → 发 field-targeted supplement（`_compose_re_supplement`），最多 3 次
+   - `phase=collecting_spec` 且 spec 完整 → 调 `confirm_re_spec_via_ui`
+
+   旧版（pre-2026-05-21）只看 phase 当 gate，遇到「brief 把 phase 推到 collecting_spec 但 spec 里有 null」就跳过 nudge → confirm 永远不推进 → `re_spec_failed`。
+5. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 补字段后再确认，省下白点 180s。
 
 ## 已知失败模式 / 怎么判断
 
@@ -86,7 +97,7 @@ CLI args:
 |---|---|---|
 | `done` | RE 跑到 terminal | 成功 |
 | `re_collecting_params_no_dispatch` | 没 `--allow-dispatch`，停在确认完 spec 那一步 | 设计就是这样，不是 bug |
-| `re_spec_failed` | 240s 内没等到 `collecting_spec` | agent 没接 nudge——多半要看 Phoenix span 里 agent 给的 admittance reason，如果是 "请求已拒绝" 调 `_compose_re_nudge`；如果是 agent 又问追加问题，看 prompt 缺哪一项 |
+| `re_spec_failed` | spec 没在预算内完整化、或 confirm 拒绝推进 | 看 `re_finalize.phase_seq` 里每条的 `missing`：长期非空说明 supplement 没把字段喂进 spec——查 `_compose_re_supplement` 对该字段的措辞是否被 agent 接受，或扩 `RE_REQUIRED_SPEC_FIELDS`。如果 missing 一直空但 confirm 仍不推进，看 Phoenix admittance reason |
 | `re_submit_failed` | submit_re_params 内部抛异常 | 多半是 `瓶 1` locator 找不到——面板没渲到 add-flask 步，回头查为什么 confirm 没真推进 backend |
 | `blocked` + `dispatch_gated=True` | 没 `--allow-dispatch` | 正常 |
 | `cc_spec_violation` 非 None | `column_type` 在 CC 终态不是 `silica_12g` | 产品 bug（guide §4.3 硬规） |
