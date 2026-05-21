@@ -99,7 +99,7 @@ CLI args:
 |---|---|---|
 | `done` | RE 跑到 terminal | 成功 |
 | `re_collecting_params_no_dispatch` | 没 `--allow-dispatch`，停在确认完 spec 那一步 | 设计就是这样，不是 bug |
-| `re_spec_failed` | spec 没在预算内完整化、或 confirm 拒绝推进 | 看 `re_finalize.phase_seq` 里每条的 `missing` + `re_finalize.ui_fill.errors`：UI fill 报 label/selector 找不到 → 面板 DOM 改了，跑 `dump_panel_doms.py` 重核；UI fill 成功但 backend missing 仍非空 → 该字段不是通过这个 input 写入的，扩 `RE_REQUIRED_SPEC_FIELDS` + `fill_re_spec_via_ui` 的 JS 映射。如果 missing 一直空但 confirm 仍不推进，看 Phoenix admittance reason |
+| `re_spec_failed` | spec 没在预算内完整化、或 confirm 拒绝推进 | 看 `re_finalize.ui_fill`：(1) `errors` 数组有 `volume input not found` → 看同一个对象里的 `diag.number_inputs`，里面有 active 卡片里所有 number input 的 min/max/value/placeholder/label，对照定位真实控件；(2) `errors` 为空但 backend `missing` 仍非空 → 该字段不是通过 `input[type=number]` 写入的，扩 `RE_REQUIRED_SPEC_FIELDS` + `fill_re_spec_via_ui` 的 JS 映射；(3) `diag.has_step_card_active=false` → 面板还没渲到 active 状态，pre-wait 不够或者根本没到 RE spec phase。如果 missing 一直空但 confirm 不推进，看 Phoenix admittance reason |
 | `re_submit_failed` | submit_re_params 内部抛异常 | 多半是 `瓶 1` locator 找不到——面板没渲到 add-flask 步，回头查为什么 confirm 没真推进 backend |
 | `blocked` + `dispatch_gated=True` | 没 `--allow-dispatch` | 正常 |
 | `cc_spec_violation` 非 None | `column_type` 在 CC 终态不是 `silica_12g` | 产品 bug（guide §4.3 硬规） |

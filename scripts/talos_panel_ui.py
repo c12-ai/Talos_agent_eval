@@ -537,7 +537,7 @@ def _re_final_panel_visible(page) -> bool:
 _RE_SPEC_FILL_JS = r"""
 (args) => {
   const { volume_ml, solvents, ratios } = args;
-  const out = {volume_filled: false, rows_filled: 0, errors: []};
+  const out = {volume_filled: false, rows_filled: 0, errors: [], diag: {}};
 
   const setInputValue = (el, val) => {
     const setter = Object.getOwnPropertyDescriptor(
@@ -554,51 +554,98 @@ _RE_SPEC_FILL_JS = r"""
     el.dispatchEvent(new Event('change', {bubbles: true}));
   };
 
-  // Locate "溶剂信息" card.
-  const titles = Array.from(document.querySelectorAll('.card-section-title'));
-  const title = titles.find(e => (e.textContent || '').trim() === '溶剂信息');
-  if (!title) { out.errors.push('溶剂信息 card title not found'); return out; }
-  const card = title.closest('.card-section');
-  if (!card) { out.errors.push('溶剂信息 .card-section not found'); return out; }
+  // Active step card; fall back to whole doc if no .step-card-active present.
+  const activeCard = document.querySelector('.step-card-active');
+  out.diag.has_step_card_active = !!activeCard;
 
-  // ---- Fill volume_ml ----
+  // Locate "溶剂信息" card. Try active card first, then any '.card-section'
+  // whose title text includes '溶剂信息' (loose match — tolerates colons,
+  // extra whitespace, future label tweaks).
+  const allTitles = Array.from(
+    (activeCard || document).querySelectorAll('.card-section-title'));
+  out.diag.titles_in_scope = allTitles.map(t => (t.textContent || '').trim().slice(0, 30));
+  const title = allTitles.find(e => /溶剂信息/.test((e.textContent || '').trim()));
+  const card = title ? (title.closest('.card-section') || title.parentElement) : null;
+  out.diag.card_found = !!card;
+
+  // Where to search for the volume input. Prefer the 溶剂信息 card; if not
+  // found, search the whole active card (or document) so we still have a
+  // shot at the volume input via min="2" fallback below.
+  const searchRoot = card || activeCard || document;
+
+  // ---- Fill volume_ml -------------------------------------------------
   if (volume_ml !== null && volume_ml !== undefined) {
-    const lab = Array.from(card.querySelectorAll('label')).find(
-      l => /溶剂体积\s*\(mL\)/.test((l.textContent || '').trim()));
-    if (!lab) {
-      out.errors.push('溶剂体积 (mL) label not found');
-    } else {
-      const container = lab.closest('.field-v6') || lab.parentElement;
-      const input = container && container.querySelector('input[type=number]');
-      if (!input) {
-        out.errors.push('volume_ml input not found in field container');
-      } else {
-        setInputValue(input, volume_ml);
-        out.volume_filled = true;
-        out.volume_value = input.value;
+    let input = null;
+    let foundBy = null;
+
+    // Strategy 1: <label> whose text mentions 体积 (loose; tolerates
+    // '溶剂体积 (mL)', '溶剂总体积 (ml)', spacing variants, etc.).
+    const labels = Array.from(searchRoot.querySelectorAll('label'));
+    for (const l of labels) {
+      const txt = (l.textContent || '').trim();
+      if (/体积/.test(txt)) {
+        const container = l.closest('.field-v6') || l.parentElement;
+        const cand = container && container.querySelector('input[type=number]');
+        if (cand) { input = cand; foundBy = 'label_text:' + txt.slice(0, 24); break; }
       }
+    }
+
+    // Strategy 2: min="2" attribute (unique to the volume input in the
+    // current RE spec panel; ratio inputs in solvent rows don't have it).
+    if (!input) {
+      const cand = searchRoot.querySelector('input[type=number][min="2"]')
+        || (activeCard && activeCard.querySelector('input[type=number][min="2"]'))
+        || document.querySelector('.step-card-active input[type=number][min="2"]');
+      if (cand) { input = cand; foundBy = 'min=2 selector'; }
+    }
+
+    if (!input) {
+      // Dump every visible number input in the active card so the caller
+      // can see what's actually rendered.
+      const dumpRoot = activeCard || document;
+      out.diag.number_inputs = Array.from(
+        dumpRoot.querySelectorAll('input[type=number]')
+      ).map(i => {
+        const r = i.getBoundingClientRect();
+        return {
+          min: i.min, max: i.max, step: i.step, value: i.value,
+          placeholder: i.placeholder,
+          label: (i.closest('.field-v6')?.querySelector('label')?.textContent || '').trim().slice(0, 40),
+          visible: r.width > 0 && r.height > 0,
+        };
+      });
+      out.errors.push('volume input not found (label-text and min=2 fallback both failed)');
+    } else {
+      setInputValue(input, volume_ml);
+      out.volume_filled = true;
+      out.volume_value = input.value;
+      out.diag.volume_found_by = foundBy;
     }
   }
 
-  // ---- Fill solvent rows (solvents + ratios in lockstep) ----
+  // ---- Fill solvent rows (solvents + ratios in lockstep) -------------
   if (solvents && ratios && solvents.length === ratios.length && solvents.length > 0) {
-    const table = card.querySelector('table');
-    if (!table) {
-      out.errors.push('solvent table not found');
+    if (!card) {
+      out.errors.push('solvent rows: 溶剂信息 card not found');
     } else {
-      const realRows = () => Array.from(table.querySelectorAll('tbody tr')).filter(
-        tr => !(tr.textContent || '').includes('暂无溶剂数据'));
-      for (let i = 0; i < solvents.length; i++) {
-        const rows = realRows();
-        const tr = rows[i];
-        if (!tr) { out.errors.push(`row ${i} not present; click + 添加溶剂 first`); continue; }
-        const sel = tr.querySelector('select');
-        const inp = tr.querySelector('input[type=number]');
-        if (sel) setSelectValue(sel, solvents[i]);
-        else out.errors.push(`row ${i}: solvent select not found`);
-        if (inp) setInputValue(inp, ratios[i]);
-        else out.errors.push(`row ${i}: ratio input not found`);
-        out.rows_filled += 1;
+      const table = card.querySelector('table');
+      if (!table) {
+        out.errors.push('solvent table not found');
+      } else {
+        const realRows = () => Array.from(table.querySelectorAll('tbody tr')).filter(
+          tr => !(tr.textContent || '').includes('暂无溶剂数据'));
+        for (let i = 0; i < solvents.length; i++) {
+          const rows = realRows();
+          const tr = rows[i];
+          if (!tr) { out.errors.push(`row ${i} not present; click + 添加溶剂 first`); continue; }
+          const sel = tr.querySelector('select');
+          const inp = tr.querySelector('input[type=number]');
+          if (sel) setSelectValue(sel, solvents[i]);
+          else out.errors.push(`row ${i}: solvent select not found`);
+          if (inp) setInputValue(inp, ratios[i]);
+          else out.errors.push(`row ${i}: ratio input not found`);
+          out.rows_filled += 1;
+        }
       }
     }
   }
@@ -636,6 +683,16 @@ def fill_re_spec_via_ui(page, *, volume_ml=None, solvents=None, ratios=None) -> 
     """
     print(f"[UI] fill_re_spec_via_ui: volume_ml={volume_ml} "
           f"solvents={solvents} ratios={ratios}")
+
+    # Wait for the RE spec panel to actually render before reading its DOM.
+    # The active card may take a few seconds to update after the agent
+    # populates spec from chat.
+    try:
+        page.locator(".step-card-active").first.wait_for(
+            state="visible", timeout=15000)
+    except Exception:
+        print("[UI] fill_re_spec_via_ui: WARNING — no .step-card-active visible after 15s; "
+              "proceeding anyway with document-wide search")
 
     # 1. Add solvent rows if needed (clicks must come from Playwright; the JS
     #    fill below operates on the resulting DOM).
