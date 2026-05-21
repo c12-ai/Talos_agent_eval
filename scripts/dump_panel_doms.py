@@ -308,66 +308,136 @@ def drive_cc_phases(page, out_dir: Path) -> list[dict]:
     return captured
 
 
+def _wait_re_spec_pattern(sid, *, want_solvents=None, want_ratio=None,
+                          want_volume=None, timeout=45) -> dict:
+    """Poll re_agent.spec until each field's null/non-null state matches the
+    requested pattern, or timeout. Each `want_*` is None (don't care), True
+    (expect non-null), or False (expect null). Returns the last spec read."""
+    deadline = time.time() + timeout
+    last_spec = {}
+
+    def matches(want, val):
+        if want is None:
+            return True
+        nonnull = val not in (None, [], {}, "")
+        return nonnull == want
+
+    while time.time() < deadline:
+        last_spec = _re_task_spec(sid)
+        if (matches(want_solvents, last_spec.get("solvents"))
+                and matches(want_ratio, last_spec.get("solvent_ratio"))
+                and matches(want_volume, last_spec.get("volume_ml"))):
+            return last_spec
+        time.sleep(3)
+    return last_spec
+
+
 def drive_re_phases(page, out_dir: Path) -> list[dict]:
-    """conv-005 (single_rotovap): plan approve -> solvent params turn -> RE
-    spec panel ready -> snapshot re_spec; then confirm RE spec -> RE params
-    panel ready -> snapshot re_params. No submission."""
-    print("\n[re] driving conv-005 to RE spec / RE params...")
+    """conv-005 (single_rotovap) driven through a sequence of RE spec
+    fill-states, capturing the panel DOM at each. This is the systematic
+    baseline for the spec-driven UI-fill code in `talos_panel_ui`:
+
+      - re_spec_empty       : spec={solvents:null, solvent_ratio:null, volume_ml:null}
+                              (table shows '暂无溶剂数据')
+      - re_spec_no_volume   : spec={solvents:[..], solvent_ratio:[..], volume_ml:null}
+                              (conv-008's failure state — solvents+ratio populated
+                              by chat, volume_ml absent from brief)
+      - re_spec_full        : spec=all-populated, panel ready to advance via 确认
+      - re_params           : collecting_params (post-confirm)
+
+    Each capture is preceded by an API-level wait that verifies spec actually
+    matches the expected pattern (live agent timing varies); if the pattern
+    doesn't match within budget we still snapshot, but log the divergence."""
+    print("\n[re] driving conv-005 through RE spec states...")
     page.goto(TALOS_BASE + "/", wait_until="load", timeout=60000)
     time.sleep(3)
     sid = new_session(page)
-    api_set_title(sid, f"[{cst_stamp('%Y%m%d-%H%M')}-domcap-re]")
+    api_set_title(sid, f"[{cst_stamp('%Y%m%d-%H%M')}-domcap-re-states]")
     print(f"  session={sid}")
+    captured: list[dict] = []
 
-    turns = build_briefs(["conv-005"])[0]["user_turns"]
-    plan_ok = spec_snapped = spec_confirmed = params_snapped = False
-    captured = []
-
-    for t in turns:
-        ut = t["user_text"].strip()
-        send_chat(page, ut)
-        wait_textarea_enabled(page, timeout=150)
-        time.sleep(2)
-        bt = body_text(page)
-
-        if not plan_ok and "批准方案" in bt:
+    # ---- Step 1: plan approve via conv-005 turn 0 + turn 2 --------------
+    send_chat(page, "做个旋蒸")
+    wait_textarea_enabled(page, timeout=150)
+    time.sleep(2)
+    for _ in range(30):
+        if "批准方案" in body_text(page):
             page.get_by_text("批准方案", exact=True).first.click(timeout=8000)
-            plan_ok = True
             print("  approved plan")
             time.sleep(3)
-            continue
-
-        # RE spec panel ready -> snapshot BEFORE confirming.
-        if plan_ok and not spec_snapped and _re_task_phase(sid)[0] == "collecting_spec":
-            # Wait for the panel to render.
-            for _ in range(30):
-                bt2 = body_text(page)
-                if any(k in bt2 for k in ["旋蒸参数预填", "旋蒸参数", "溶剂信息", "合并液"]):
-                    break
-                time.sleep(2)
-            print("  re spec panel visible -> snapshot")
-            captured.append(snapshot(page, "re_spec", sid, out_dir))
-            spec_snapped = True
-            print("  confirming RE spec (no submission)...")
-            try:
-                confirm_re_spec_via_ui(page, TALOS_BASE, sid)
-                spec_confirmed = True
-            except Exception as exc:
-                print(f"  RE spec confirm failed: {exc}")
-            time.sleep(3)
-            continue
-
-        if spec_confirmed and not params_snapped and _re_task_phase(sid)[0] == "collecting_params":
-            # Wait for params panel.
-            for _ in range(30):
-                bt2 = body_text(page)
-                if any(k in bt2 for k in ["添加茄形瓶", "茄形瓶", "水浴温度", "压力", "气压梯度"]):
-                    break
-                time.sleep(2)
-            print("  re params panel visible -> snapshot")
-            captured.append(snapshot(page, "re_params", sid, out_dir))
-            params_snapped = True
             break
+        time.sleep(2)
+    send_chat(page, "嗯")
+    wait_textarea_enabled(page, timeout=150)
+    time.sleep(2)
+
+    # Wait for collecting_spec phase to engage.
+    for _ in range(60):
+        if _re_task_phase(sid)[0] == "collecting_spec":
+            break
+        time.sleep(2)
+    # Wait for panel DOM to render.
+    for _ in range(30):
+        if any(k in body_text(page)
+               for k in ["旋蒸参数预填", "旋蒸参数", "溶剂信息", "合并液"]):
+            break
+        time.sleep(2)
+
+    # ---- State 1: re_spec_empty ----------------------------------------
+    spec = _wait_re_spec_pattern(sid, want_solvents=False, want_ratio=False,
+                                  want_volume=False, timeout=15)
+    print(f"  [state empty] spec={spec}")
+    captured.append(snapshot(page, "re_spec_empty", sid, out_dir))
+
+    # ---- State 2: re_spec_no_volume (solvents+ratio populated; no volume)
+    # Send only system+ratio, deliberately omit volume so we capture the
+    # exact DOM shape that conv-008 hits in production.
+    print("  sending solvents+ratio chat (no volume): "
+          "'用 PE/EA 5:1 体系做旋蒸，化合物热稳定性正常'")
+    send_chat(page, "用 PE/EA 5:1 体系做旋蒸，化合物热稳定性正常")
+    wait_textarea_enabled(page, timeout=150)
+    time.sleep(3)
+    spec = _wait_re_spec_pattern(sid, want_solvents=True, want_ratio=True,
+                                  want_volume=False, timeout=60)
+    print(f"  [state no_volume] spec={spec}")
+    if spec.get("volume_ml") is not None:
+        print("  WARN: agent auto-filled volume_ml; capture mislabel (still useful)")
+    captured.append(snapshot(page, "re_spec_no_volume", sid, out_dir))
+
+    # ---- State 3: re_spec_full -----------------------------------------
+    print("  sending volume chat: '总体积大概 300 ml'")
+    send_chat(page, "总体积大概 300 ml")
+    wait_textarea_enabled(page, timeout=150)
+    time.sleep(3)
+    spec = _wait_re_spec_pattern(sid, want_solvents=True, want_ratio=True,
+                                  want_volume=True, timeout=60)
+    print(f"  [state full] spec={spec}")
+    if spec.get("volume_ml") is None:
+        print("  WARN: agent did NOT pick up volume from chat; capture mislabel")
+    captured.append(snapshot(page, "re_spec_full", sid, out_dir))
+
+    # ---- State 4: re_params (post-confirm) -----------------------------
+    # Only attempt confirm if spec is actually full (else we'd just waste 180s).
+    if spec.get("volume_ml") is not None and spec.get("solvents") and spec.get("solvent_ratio"):
+        print("  confirming RE spec (advances to collecting_params)...")
+        try:
+            confirm_re_spec_via_ui(page, TALOS_BASE, sid)
+        except Exception as exc:
+            print(f"  RE spec confirm failed: {exc}")
+        # Wait for params phase + panel render.
+        for _ in range(60):
+            if _re_task_phase(sid)[0] == "collecting_params":
+                break
+            time.sleep(2)
+        for _ in range(30):
+            if any(k in body_text(page)
+                   for k in ["添加茄形瓶", "茄形瓶", "水浴温度", "压力", "气压梯度"]):
+                break
+            time.sleep(2)
+        print("  re params panel visible -> snapshot")
+        captured.append(snapshot(page, "re_params", sid, out_dir))
+    else:
+        print("  skipping re_params snapshot — spec never reached full state")
 
     return captured
 

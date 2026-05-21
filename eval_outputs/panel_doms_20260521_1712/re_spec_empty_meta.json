@@ -1,0 +1,26 @@
+{
+  "phase": "re_spec_empty",
+  "session_id": "1db6b531-5bc0-4417-9f80-1a9b160dd7c2",
+  "captured_at": "2026-05-21T17:19:37.148704",
+  "cc_phase": null,
+  "re_phase": "collecting_spec",
+  "re_spec": {
+    "solvents": null,
+    "volume_ml": null,
+    "solvent_ratio": null
+  },
+  "active_card_text_snippet": "旋蒸参数预填\n溶剂信息\n溶剂体积 (mL)\n#\t溶剂\t比例\t\n暂无溶剂数据\n+ 添加溶剂\n确认",
+  "modal_text_snippet": "",
+  "tasks": [
+    {
+      "task_type": "re_agent",
+      "phase": "collecting_spec",
+      "spec": {
+        "solvents": null,
+        "volume_ml": null,
+        "solvent_ratio": null
+      },
+      "params": null
+    }
+  ]
+}

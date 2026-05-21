@@ -1,0 +1,207 @@
+[
+  {
+    "tag": "textarea",
+    "type": "textarea",
+    "value": "",
+    "placeholder": "向 TALOS 发送消息...",
+    "ariaLabel": "",
+    "readonly": false,
+    "disabled": true,
+    "label": "TALOS",
+    "cssPath": "div.flex.flex-1 > div.chat-col:nth-of-type(1) > div.flex.flex-col > div.flex-shrink-0:nth-of-type(3) > div.chat-input-wrapper > textarea.flex-1.border-0",
+    "inActiveCard": false,
+    "inModal": false
+  },
+  {
+    "tag": "select",
+    "type": "select-one",
+    "value": "PE",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": false,
+    "disabled": true,
+    "label": "1",
+    "cssPath": "div.space-y-2 > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(1) > td.py-2.pr-2:nth-of-type(2) > select.w-full.border",
+    "inActiveCard": false,
+    "inModal": false,
+    "options": [
+      {
+        "value": "PE",
+        "text": "PE 石油醚"
+      },
+      {
+        "value": "EA",
+        "text": "EA 乙酸乙酯"
+      },
+      {
+        "value": "DCM",
+        "text": "DCM 二氯甲烷"
+      },
+      {
+        "value": "MeOH",
+        "text": "MeOH 甲醇"
+      }
+    ]
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "5",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "PE 石油醚\nEA 乙酸乙酯\nDCM 二氯甲烷\nMeOH 甲醇",
+    "cssPath": "div.space-y-2 > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(1) > td.py-2.pr-2:nth-of-type(3) > input.w-full.border",
+    "inActiveCard": false,
+    "inModal": false
+  },
+  {
+    "tag": "select",
+    "type": "select-one",
+    "value": "EA",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": false,
+    "disabled": true,
+    "label": "2",
+    "cssPath": "div.space-y-2 > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(2) > td.py-2.pr-2:nth-of-type(2) > select.w-full.border",
+    "inActiveCard": false,
+    "inModal": false,
+    "options": [
+      {
+        "value": "PE",
+        "text": "PE 石油醚"
+      },
+      {
+        "value": "EA",
+        "text": "EA 乙酸乙酯"
+      },
+      {
+        "value": "DCM",
+        "text": "DCM 二氯甲烷"
+      },
+      {
+        "value": "MeOH",
+        "text": "MeOH 甲醇"
+      }
+    ]
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "1",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "PE 石油醚\nEA 乙酸乙酯\nDCM 二氯甲烷\nMeOH 甲醇",
+    "cssPath": "div.space-y-2 > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(2) > td.py-2.pr-2:nth-of-type(3) > input.w-full.border",
+    "inActiveCard": false,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "3",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "1",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(1) > td.py-2.pr-2:nth-of-type(2) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "640",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "1",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(1) > td.py-2.pr-2:nth-of-type(3) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "2",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "2",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(2) > td.py-2.pr-2:nth-of-type(2) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "400",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "2",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(2) > td.py-2.pr-2:nth-of-type(3) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "2",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "3",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(3) > td.py-2.pr-2:nth-of-type(2) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "200",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "3",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(3) > td.py-2.pr-2:nth-of-type(3) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "15",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "4",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(4) > td.py-2.pr-2:nth-of-type(2) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "100",
+    "placeholder": "",
+    "ariaLabel": "",
+    "readonly": true,
+    "disabled": false,
+    "label": "4",
+    "cssPath": "div.space-y-2:nth-of-type(2) > table.w-full.text-sm > tbody > tr.border-b.border-slate-100:nth-of-type(4) > td.py-2.pr-2:nth-of-type(3) > input.w-full.border",
+    "inActiveCard": true,
+    "inModal": false
+  }
+]

@@ -1,0 +1,28 @@
+[
+  {
+    "tag": "textarea",
+    "type": "textarea",
+    "value": "",
+    "placeholder": "向 TALOS 发送消息...",
+    "ariaLabel": "",
+    "readonly": false,
+    "disabled": false,
+    "label": "TALOS",
+    "cssPath": "div.flex.flex-1 > div.chat-col:nth-of-type(1) > div.flex.flex-col > div.flex-shrink-0:nth-of-type(3) > div.chat-input-wrapper > textarea.flex-1.border-0",
+    "inActiveCard": false,
+    "inModal": false
+  },
+  {
+    "tag": "input",
+    "type": "number",
+    "value": "0",
+    "placeholder": "0",
+    "ariaLabel": "",
+    "readonly": false,
+    "disabled": false,
+    "label": "溶剂体积 (mL)",
+    "cssPath": "div.space-y-3:nth-of-type(2) > div.card-section > div > div.field-grid:nth-of-type(2) > div.field-v6 > input.field-input-v6",
+    "inActiveCard": true,
+    "inModal": false
+  }
+]
