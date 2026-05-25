@@ -1106,8 +1106,73 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
         return rec
 
     # ---- Phase D: confirm spec via UI -----------------------------------
-    from talos_panel_ui import confirm_re_spec_via_ui
-    ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
+    # Network capture: attach Playwright listeners BEFORE the click so we
+    # observe whether 确认 triggers any backend API and what the response
+    # is. 2026-05-25 conv-008 incident: spec complete + agent-recommended,
+    # 6× 确认 click + 1× chat fallback all failed to advance phase. Backend
+    # `user_input` stayed None — strong sign click never reached the backend
+    # confirm endpoint. This capture distinguishes (a) click triggers no API
+    # call (UI bug / wrong button), (b) API called but backend 4xx/5xx,
+    # (c) API 2xx but state machine doesn't advance. Filter to mutation
+    # methods so background GET workflow-state polls don't clutter the log.
+    net = {
+        "requests": [], "responses": [],
+        "started_at": time.time(),
+        "note": "captures POST/PUT/PATCH on /api/sessions/ during confirm",
+    }
+
+    def _on_req(req):
+        try:
+            if "/api/sessions/" in req.url and req.method in ("POST", "PUT", "PATCH"):
+                net["requests"].append({
+                    "t_rel": round(time.time() - net["started_at"], 2),
+                    "url": req.url, "method": req.method,
+                    "post_data": (req.post_data or "")[:2000],
+                })
+        except Exception:
+            pass
+
+    def _on_resp(resp):
+        try:
+            if "/api/sessions/" not in resp.url:
+                return
+            method = (getattr(resp.request, "method", "") or "")
+            if method not in ("POST", "PUT", "PATCH"):
+                return
+            try:
+                body = resp.text()[:2000]
+            except Exception as exc:
+                body = f"<body unavailable: {exc}>"
+            net["responses"].append({
+                "t_rel": round(time.time() - net["started_at"], 2),
+                "url": resp.url, "status": resp.status,
+                "method": method, "body": body,
+            })
+        except Exception:
+            pass
+
+    page.on("request", _on_req)
+    page.on("response", _on_resp)
+    try:
+        from talos_panel_ui import confirm_re_spec_via_ui
+        ok = confirm_re_spec_via_ui(page, TALOS_BASE, session_id)
+    finally:
+        try:
+            page.remove_listener("request", _on_req)
+            page.remove_listener("response", _on_resp)
+        except Exception:
+            pass
+    net["ended_at"] = time.time()
+    net["duration_s"] = round(net["ended_at"] - net["started_at"], 1)
+    net["total_requests"] = len(net["requests"])
+    net["total_responses"] = len(net["responses"])
+    net["status_buckets"] = {}
+    for r in net["responses"]:
+        bucket = f"{r['status'] // 100}xx"
+        net["status_buckets"][bucket] = net["status_buckets"].get(bucket, 0) + 1
+    rec["network_during_re_confirm"] = net
+    log(f"  [re-finalize] network capture: {net['total_requests']} req / "
+        f"{net['total_responses']} resp / buckets={net['status_buckets']}")
     record("post_confirm_spec")
     if not ok:
         log("  [re-finalize] confirm_re_spec_via_ui returned False")
