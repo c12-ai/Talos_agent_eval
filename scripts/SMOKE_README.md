@@ -95,7 +95,11 @@ CLI args:
    - **为什么 chat supplement "补充 spec: xxx" 不行**：admittance 把这种 UI-指令-味的短消息过滤掉；只有 chemistry-rich 上下文才放行。
    - **为什么用 `.type()` 而不是 JS 直接设 `value`**：React 控制的 input 有内部 `_valueTracker` 记录"上次提交的值"。JS 直接 `setter.call(el, x)` 改了 DOM `value`，再 dispatch input 事件——React 比较 `el.value === tracker.value` 发现"看起来没变"（因为 tracker 才是 React 的真值），**跳过 onChange，前端不发 API 给 backend**。2026-05-21 conv-008 retry 实测：`volume_value='288'` 写到 DOM 里了，但 `spec.volume_ml` 一直 null。Playwright `.type()` 模拟真键盘事件，React SyntheticEvent 层正常拿到，onChange 触发，backend 真更新。同理 `.select_option()` 也走真选择路径。
 6. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 走 nudge+UI-fill 流程，省下白点 180s。
-7. **面板 DOM 是已知量**：`scripts/dump_panel_doms.py` 跑一遍能扒出 cc_spec / cc_params / re_spec / re_params 四个面板的全部可编辑控件（label / cssPath / value / readonly）。再加新的 UI 直填字段前先用它复核当前 DOM；产物在 `eval_outputs/panel_doms_*/summary.md`。这条脚本不消耗 lab。
+7. **CC spec 同款保护**（2026-05-25 加，预防性）：CC spec 推进 phase 的双校验机制和 RE 一致——backend 要求 agent's recommendation 完整。conv-008 没踩，是因为 brief u04 把 SMILES + 上样量 + Rf + 体系都给齐了。如果某个 conv brief 漏一个（最脆的是 `sample_amount_g`，只能从 chat 来，TLC 图识别覆盖不到），会跟 RE volume_ml 一样静默拒。
+   - **`CC_REQUIRED_SPEC_FIELDS = ("solvents", "rf_values", "solvent_ratio", "sample_amount_g", "tlc_image_url")`**。`tlc_image_url` 由 TLC 模态上传补，drive 函数在判断"是否需要 nudge"时把它排除掉。
+   - **`_compose_cc_nudge(brief)`** 用正则从 brief user_turns 抽 SMILES / 上样量 / Rf / 体系（默认值 200 mg / Rf 0.35 / PE/EA 1:1），组装 chemistry-rich 句子。`_extract_cc_hints` 单独可测。
+   - **`_drive_cc_spec_if_incomplete`** 统一入口：spec 不完整就先 nudge → 等 180s 让 agent 补 → 然后跑 `confirm_cc_spec_via_ui`（TLC 上传 + 面板确认 + state polling）。主循环 in-loop CC confirm trigger 现在直接调它，不再绕 `confirm_cc_spec_via_ui`。
+8. **面板 DOM 是已知量**：`scripts/dump_panel_doms.py` 跑一遍能扒出 cc_spec / cc_params / re_spec / re_params 四个面板的全部可编辑控件（label / cssPath / value / readonly）。再加新的 UI 直填字段前先用它复核当前 DOM；产物在 `eval_outputs/panel_doms_*/summary.md`。这条脚本不消耗 lab。
 
 ## 已知失败模式 / 怎么判断
 

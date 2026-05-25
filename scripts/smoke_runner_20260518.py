@@ -399,14 +399,24 @@ def run_conv(brief, browser, args):
 
         elif (stage == "cc_spec" and params_given
               and any(x in bt for x in ["点击打开识别面板", "过柱参数预填", "重新识别"])):
-            from talos_panel_ui import confirm_cc_spec_via_ui
-            ok = confirm_cc_spec_via_ui(page, tlc_image=TLC_IMAGE, rf_value=args.rf,
-                                        base_url=TALOS_BASE, session_id=session_id)
-            if ok:
-                rec["panel_action"] = "confirm_cc_spec"; stage = "cc_submit"
+            # Always route CC spec confirm through _drive_cc_spec_if_incomplete.
+            # Drive function decides internally whether to send a CC nudge
+            # (mirrors RE: if cc_agent.spec is missing chat-only fields,
+            # panel 确认 silently rejects because backend cross-checks
+            # against agent's recommendation — same bug pattern fixed for
+            # RE in d5274a4). Drive then runs the proven TLC + scoped
+            # confirm path.
+            cc_drive_log = _drive_cc_spec_if_incomplete(page, brief, session_id, args)
+            rec["cc_drive"] = cc_drive_log
+            if cc_drive_log.get("confirm_ok"):
+                rec["panel_action"] = (
+                    "confirm_cc_spec_DRIVEN" if cc_drive_log.get("nudge_sent")
+                    else "confirm_cc_spec"
+                )
+                stage = "cc_submit"
             else:
                 rec["panel_action"] = "confirm_cc_spec_TIMEOUT"
-                log("  [panel] CC spec confirm did not advance cc_agent — staying at cc_spec")
+                log("  [panel] CC spec drive failed — staying at cc_spec")
 
         elif stage == "cc_submit" and dispatch_intent(ut):
             # Wait for the CC params panel to be ready before submitting. Use
@@ -456,7 +466,7 @@ def run_conv(brief, browser, args):
             # to post-loop _drive_re_after_cc which handles supplements.
             ph_now, _ = _re_task_phase(session_id)
             spec_now = _re_task_spec(session_id)
-            missing_now = _spec_missing(spec_now)
+            missing_now = _re_spec_missing(spec_now)
             spec_ready = (ph_now == "collecting_params") or (
                 ph_now == "collecting_spec" and not missing_now
             )
@@ -646,7 +656,7 @@ def _re_task_spec(session_id):
 RE_REQUIRED_SPEC_FIELDS = ("solvents", "solvent_ratio", "volume_ml")
 
 
-def _spec_missing(spec):
+def _re_spec_missing(spec):
     """Return list of RE_REQUIRED_SPEC_FIELDS that are absent / null / empty."""
     out = []
     for k in RE_REQUIRED_SPEC_FIELDS:
@@ -671,13 +681,203 @@ RE_DEFAULT_SOLVENTS = ["PE", "EA"]
 RE_DEFAULT_RATIOS = [1.0, 1.0]
 
 
+def _cc_task(session_id):
+    """Return the cc_agent task dict (or {}). Mirrors _re_task."""
+    for t in (api_workflow_state(session_id).get("tasks") or []):
+        if "cc" in (t.get("task_type") or ""):
+            return t
+    return {}
+
+
 def _cc_task_phase(session_id):
     """Return cc_agent phase string ('collecting_spec' / 'collecting_params' /
     'conducting' / 'done'), or None if task absent."""
-    for t in (api_workflow_state(session_id).get("tasks") or []):
-        if "cc" in (t.get("task_type") or ""):
-            return t.get("phase")
-    return None
+    t = _cc_task(session_id)
+    return t.get("phase") if t else None
+
+
+def _cc_task_spec(session_id):
+    """Return the cc_agent task spec dict (or {})."""
+    return _cc_task(session_id).get("spec") or {}
+
+
+# Fields that must be non-null in cc_agent.spec before the panel 确认 will
+# actually advance backend to collecting_params. Mirrors RE_REQUIRED_SPEC_FIELDS;
+# bug pattern is identical (backend phase advance requires agent recommendation
+# to be complete, not just frontend DOM values).
+#
+# Source: cc_agent spec layout observed 2026-05-21 conv-008:
+#   {solvents: [...], rf_values: [...], solvent_ratio: [...],
+#    tlc_image_url: <str>, sample_amount_g: <float>}
+#
+# `tlc_image_url` is populated by the TLC modal upload (always done before
+# panel confirm), so it's normally non-null by the time we'd check. The
+# other 4 come from chat context + TLC image OCR. The most fragile is
+# `sample_amount_g` — it's chat-only (TLC image can't recover it).
+CC_REQUIRED_SPEC_FIELDS = (
+    "solvents", "rf_values", "solvent_ratio",
+    "sample_amount_g", "tlc_image_url",
+)
+
+
+def _cc_spec_missing(spec):
+    """Return list of CC_REQUIRED_SPEC_FIELDS that are absent / null / empty."""
+    out = []
+    for k in CC_REQUIRED_SPEC_FIELDS:
+        v = spec.get(k)
+        if v is None or v == [] or v == {} or v == "":
+            out.append(k)
+    return out
+
+
+def _extract_cc_hints(brief):
+    """Scan brief user turns for CC spec values (SMILES / sample amount /
+    Rf / solvent system). Returns dict with whatever could be parsed.
+    Missing keys → caller falls back to defaults.
+
+    Format examples from conv-008 u04:
+      "SMILES Clc1ccc(...)C，400 mg，Rf 0.3，PE:EA 1:1"
+    The brief is free-form natural language so we use loose regex.
+    """
+    import re
+    text = " ".join(t.get("user_text", "") for t in brief.get("user_turns", []))
+    hints = {}
+    m = re.search(r"SMILES\s*([A-Za-z0-9@+\-=#\\/\[\]\(\)\.%]+)", text)
+    if m:
+        hints["smiles"] = m.group(1)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*mg", text)
+    if m:
+        hints["sample_mg"] = float(m.group(1))
+    m = re.search(r"Rf\s*[=:]?\s*(\d+(?:\.\d+)?)", text)
+    if m:
+        hints["rf"] = float(m.group(1))
+    m = re.search(r"(PE|DCM)\s*[:/]\s*(EA|MeOH|Et2O)\s*(\d+)\s*[:/]\s*(\d+)", text)
+    if m:
+        hints["system"] = f"{m.group(1)}/{m.group(2)}"
+        hints["ratio_a"] = int(m.group(3))
+        hints["ratio_b"] = int(m.group(4))
+    elif re.search(r"PE\s*[:/]\s*EA", text):
+        hints["system"] = "PE/EA"
+    return hints
+
+
+def _compose_cc_nudge(brief):
+    """Compose a CC startup / refresh prompt from brief context.
+
+    Sent when cc_agent.spec is incomplete — gives agent the same chemistry
+    info brief originally supplied, in a chemistry-rich natural-language
+    form that admittance lets through (same path RE nudge uses, see
+    _compose_re_nudge). Agent re-issues a complete spec recommendation;
+    user 确认 then advances backend to collecting_params.
+
+    Defaults match smoke_runner CLI defaults (--rf=0.35, --slot=12g) so
+    even briefs that omit Rf / sample_amount still produce a sensible
+    nudge that agent can fill the spec from.
+    """
+    h = _extract_cc_hints(brief)
+    smiles = h.get("smiles", "")
+    sample_mg = h.get("sample_mg", 200)
+    rf = h.get("rf", 0.35)
+    system = h.get("system", "PE/EA")
+    ra = h.get("ratio_a", 1)
+    rb = h.get("ratio_b", 1)
+    smiles_clause = f"SMILES {smiles}，" if smiles else ""
+    return (
+        "好的，开始过柱。"
+        f"补充一下推荐依据：{smiles_clause}"
+        f"上样量 {sample_mg:g} mg，"
+        f"TLC Rf {rf:g}，展开剂体系 {system} = {ra}:{rb}。"
+        "请基于这些参数生成过柱预填参数推荐（柱规格、硅胶用量、洗脱体系、梯度），"
+        "我会在右侧面板确认。"
+    )
+
+
+def _drive_cc_spec_if_incomplete(page, brief, session_id, args):
+    """CC analog of _drive_re_after_cc.
+
+    Always invoked in lieu of confirm_cc_spec_via_ui at the in-loop CC
+    spec trigger. Decides internally whether to nudge:
+      - If cc_agent.spec is missing any non-tlc field, send _compose_cc_nudge
+        first so agent re-issues a complete recommendation (without this,
+        backend's double-check at panel-confirm time silently rejects;
+        same bug pattern as RE — see _drive_re_after_cc commentary).
+      - Then run TLC modal upload + scoped panel 确认 + state polling
+        (delegated to confirm_cc_spec_via_ui — proven path).
+
+    `tlc_image_url` is intentionally excluded from the "needs nudge" check:
+    the TLC modal upload that confirm_cc_spec_via_ui itself performs is
+    what fills tlc_image_url, so it's expected to be null before this
+    runs.
+    """
+    rec = {"messages_sent": [], "phase_seq": [], "nudge_sent": False,
+           "confirm_ok": False}
+
+    def record(tag):
+        ph = _cc_task_phase(session_id)
+        spec = _cc_task_spec(session_id)
+        missing = _cc_spec_missing(spec)
+        rec["phase_seq"].append({
+            "at": tag, "phase": ph, "missing": missing, "spec": spec,
+        })
+        return ph, spec, missing
+
+    log("  [cc-finalize] start")
+    if not _wait_chat_ready(page, session_id, timeout=60):
+        log("  [cc-finalize] WARNING: chat textarea never went enabled")
+    ph, spec, missing_all = record("pre_engage")
+    missing_excl_tlc = [m for m in missing_all if m != "tlc_image_url"]
+
+    # ---- Phase A: re-engage agent if spec missing chat-only fields -----
+    needs_nudge = ph in (None, "not_started") or missing_excl_tlc
+    if needs_nudge:
+        nudge = _compose_cc_nudge(brief)
+        log(f"  [cc-finalize] phase={ph} missing={missing_all}; "
+            f"sending nudge: {nudge[:80]}...")
+        try:
+            send_chat(page, nudge)
+            rec["nudge_sent"] = True
+            rec["nudge_text"] = nudge
+            rec["messages_sent"].append({"kind": "cc_nudge", "text": nudge})
+        except Exception as exc:
+            log(f"  [cc-finalize] nudge send failed: {exc}")
+            rec["nudge_error"] = str(exc)
+            rec["final_stage"] = "cc_spec_failed"
+            return rec
+        # Wait for agent to fill all chat-derivable fields. tlc_image_url
+        # stays null until TLC modal upload — don't gate on it here.
+        engage_deadline = time.time() + 180
+        engaged = False
+        while time.time() < engage_deadline:
+            time.sleep(6)
+            ph, spec, missing_all = record("waiting_engage")
+            missing_excl_tlc = [m for m in missing_all if m != "tlc_image_url"]
+            if ph == "collecting_params":
+                engaged = True
+                break
+            if ph == "collecting_spec" and not missing_excl_tlc:
+                engaged = True
+                break
+        if not engaged:
+            log(f"  [cc-finalize] nudge engage budget exhausted; "
+                f"phase={ph} missing={missing_all} — falling through to TLC + confirm")
+    else:
+        log(f"  [cc-finalize] phase={ph} spec already complete (excl tlc); "
+            f"skipping nudge")
+
+    # ---- Phase B: TLC modal upload + scoped panel 确认 -----------------
+    # confirm_cc_spec_via_ui internally calls upload_tlc_and_confirm_spec
+    # (which populates tlc_image_url) then polls cc_agent.phase ==
+    # collecting_params, retrying the scoped confirm once.
+    from talos_panel_ui import confirm_cc_spec_via_ui
+    ok = confirm_cc_spec_via_ui(page, tlc_image=TLC_IMAGE, rf_value=args.rf,
+                                base_url=TALOS_BASE, session_id=session_id)
+    record("post_confirm")
+    rec["confirm_ok"] = ok
+    rec["final_stage"] = "cc_submit" if ok else "cc_spec_failed"
+    if not ok:
+        log(f"  [cc-finalize] confirm_cc_spec_via_ui returned False; "
+            f"last phase_seq tail={rec['phase_seq'][-1] if rec['phase_seq'] else None}")
+    return rec
 
 
 def _compose_re_nudge(brief, volume_ml: int):
@@ -758,7 +958,7 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
     def record(tag):
         ph, st_ = _re_task_phase(session_id)
         spec = _re_task_spec(session_id)
-        missing = _spec_missing(spec)
+        missing = _re_spec_missing(spec)
         prev = rec["phase_seq"][-1] if rec["phase_seq"] else None
         if (not prev or prev.get("phase") != ph
                 or prev.get("missing") != missing
