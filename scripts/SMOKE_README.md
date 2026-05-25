@@ -79,21 +79,23 @@ CLI args:
 2. **brief 里的"热稳定性正常"/"下发"等短句驱不动 RE**——admittance 把它们当面板确认意图拒掉。Post-loop `_drive_re_after_cc` 自己合成完整 prompt 推 agent。
 3. **`re_agent.spec` 任一必填字段为 null → 前端 confirm 静默被拒**（panel 点确认不报错但 backend 不推进到 `collecting_params`）。已知触发：
    - `solvent_ratio=null`（brief 没给比例）
-   - `volume_ml=null`（brief 没给体积，2026-05-21 conv-008 案例）
+   - `volume_ml=null`（brief 没给体积，2026-05-21 / 2026-05-25 conv-008 案例）
    - `solvents=null/empty`（同类）
 
    `RE_REQUIRED_SPEC_FIELDS = ("solvents", "solvent_ratio", "volume_ml")`（见 `smoke_runner_20260518.py`）。再发现新的 null-字段静默拒 bug，扩这个常量 + `fill_re_spec_via_ui` 的 JS 字段映射即可。
-4. **缺失 spec 字段用 UI 直填，不靠 chat**。`_drive_re_after_cc` 现在是：
-   - **A.** phase 在 `not_started` 时发一次 startup nudge（`_compose_re_nudge`，体积是 100-300 mL 之间的 per-run 随机值），把 agent 推进到 `collecting_spec`
-   - **B.** 等 15s 让 agent 自己把 spec 从聊天上下文填齐
-   - **C.** 仍有 missing 字段时调 `talos_panel_ui.fill_re_spec_via_ui`，**用 Playwright `.type()` 模拟真键盘输入（不是 JS 直接 `el.value = ...`）**往面板 input 写值；溶剂表用 `select_option` + 真键盘。轮询 15s 看 backend spec 是否同步，**不同步也继续走到 confirm**（仅打 WARN）。
-   - **D.** 点 `确认` 推进到 `collecting_params`（仍用 `confirm_re_spec_via_ui`）。
-
-   **为什么不再用 chat 兜底**：2026-05-21 conv-008 第一次 retry 实测，bare "补充 spec：合并液 200 ml" 这种短消息被 admittance 过滤、agent 完全没把值写进 spec。UI 直填是确定性路径，跟 agent 的 LLM 不确定性彻底解耦。
-
-   **为什么用 `.type()` 而不是 JS 直接设 `value`**：React 控制的 input 有内部 `_valueTracker` 记录"上次提交的值"。JS 直接 `setter.call(el, x)` 改了 DOM `value`，再 dispatch input 事件——React 比较 `el.value === tracker.value` 发现"看起来没变"（因为 tracker 才是 React 的真值），**跳过 onChange，前端不发 API 给 backend**。2026-05-21 conv-008 第二次 retry 实测：`volume_value='288'` 写到 DOM 里了，但 `spec.volume_ml` 一直 null。Playwright `.type()` 模拟真键盘事件，React SyntheticEvent 层正常拿到，onChange 触发，backend 真更新。同理 `.select_option()` 也走真选择路径。
-5. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 走 UI-fill 流程，省下白点 180s。
-6. **面板 DOM 是已知量**：`scripts/dump_panel_doms.py` 跑一遍能扒出 cc_spec / cc_params / re_spec / re_params 四个面板的全部可编辑控件（label / cssPath / value / readonly）。再加新的 UI 直填字段前先用它复核当前 DOM；产物在 `eval_outputs/panel_doms_*/summary.md`。这条脚本不消耗 lab。
+4. **关键陷阱：UI 直填不够，必须 nudge agent 同步 spec**。2026-05-25 conv-008（HEAD `d8de433`）实测：UI 直填后 backend `spec.volume_ml=192.0` 真的更新了，但 5 次 `确认` 点击 + 一次 chat fallback 全部失败，phase 始终停在 `collecting_spec`。
+   - **根因**：backend 推进 phase 的语义不是"DOM 有完整 spec 就行"——它要 **agent 内部记住的 spec recommendation** 也完整，user 在确认 **agent 的推荐**。UI 直填走 frontend onChange → backend 字段更新通道，**根本没经过 agent**，agent 的"心智模型"里那个字段还是 null。点 `确认` 时 backend 双校验失败（spec 完整 ✓，但不是 agent 认可的最新 recommendation ✗），静默拒。
+   - **修复**（HEAD ≥ d8de433+1）：`_drive_re_after_cc` 现在 **无条件** 在 spec 不完整时送 nudge，**不只 `not_started`**。Nudge 是 chemistry-rich 自然语言（"合并液约 192 ml，体系是 PE 和 EA，PE:EA = 1:1"），admittance 当 chemistry intent 放行 → agent 重新生成完整 spec recommendation → 后续 UI 填值变成 idempotent 兜底 → `确认` 能推进。
+5. **`_drive_re_after_cc` 现在的执行序**：
+   - **A.** 读 phase + spec。**`needs_nudge = phase==not_started OR (phase==collecting_spec AND missing 非空)`**。`needs_nudge=True` 就发一次 `_compose_re_nudge`（体积 100-300 mL 随机），等到 phase 进 collecting_params **或** spec 在 collecting_spec 下变完整（180s 预算）。Budget 耗尽不 bail，落到 C 兜底。
+   - **B.** 短 grace（15s）让 agent 处理完最后的 chat 上下文。
+   - **C.** 仍有 missing 字段时调 `talos_panel_ui.fill_re_spec_via_ui`，**用 Playwright `.type()` 模拟真键盘输入（不是 JS 直接 `el.value = ...`）**往面板 input 写值；溶剂表用 `select_option` + 真键盘。轮询 15s 看 backend spec 是否同步。
+   - **D.** 点 `确认` 推进到 `collecting_params`（`confirm_re_spec_via_ui`，180s 预算）。
+   - **为什么 nudge 优先于 UI 直填**：让 agent "知道" 完整 spec 是 backend 推进 phase 的必要条件；UI 直填只能改 backend 字段值，改不了 agent 的内部 recommendation。UI 直填只在 agent 怎么 nudge 都不肯填的边缘情况兜底（少见）。
+   - **为什么 chat supplement "补充 spec: xxx" 不行**：admittance 把这种 UI-指令-味的短消息过滤掉；只有 chemistry-rich 上下文才放行。
+   - **为什么用 `.type()` 而不是 JS 直接设 `value`**：React 控制的 input 有内部 `_valueTracker` 记录"上次提交的值"。JS 直接 `setter.call(el, x)` 改了 DOM `value`，再 dispatch input 事件——React 比较 `el.value === tracker.value` 发现"看起来没变"（因为 tracker 才是 React 的真值），**跳过 onChange，前端不发 API 给 backend**。2026-05-21 conv-008 retry 实测：`volume_value='288'` 写到 DOM 里了，但 `spec.volume_ml` 一直 null。Playwright `.type()` 模拟真键盘事件，React SyntheticEvent 层正常拿到，onChange 触发，backend 真更新。同理 `.select_option()` 也走真选择路径。
+6. **in-loop RE confirm 触发不能只看 body text**——CC 总结卡片里有"溶剂体系"会假阳性。现在加了 `_re_task_phase` API gate **+ spec 完整性 gate**：spec 不完整时 in-loop 跳过 confirm（`panel_action="confirm_re_spec_DEFERRED"`），交给 post-loop 走 nudge+UI-fill 流程，省下白点 180s。
+7. **面板 DOM 是已知量**：`scripts/dump_panel_doms.py` 跑一遍能扒出 cc_spec / cc_params / re_spec / re_params 四个面板的全部可编辑控件（label / cssPath / value / readonly）。再加新的 UI 直填字段前先用它复核当前 DOM；产物在 `eval_outputs/panel_doms_*/summary.md`。这条脚本不消耗 lab。
 
 ## 已知失败模式 / 怎么判断
 

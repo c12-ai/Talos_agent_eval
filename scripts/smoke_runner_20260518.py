@@ -780,13 +780,31 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
         log("  [re-finalize] WARNING: chat textarea never went enabled")
     record("start")
 
-    # ---- Phase A: engage agent ------------------------------------------
+    # ---- Phase A: engage agent + ensure it knows the full spec ---------
+    # Send the nudge whenever EITHER:
+    #   (a) phase is not_started — engagement needed, OR
+    #   (b) phase is collecting_spec but spec has missing fields — agent
+    #       hasn't "heard" those values, so its internal recommendation is
+    #       still partial. Without this, even after we type the missing
+    #       value into the panel input (frontend onChange → backend field
+    #       update succeeds), backend's confirm-spec gate rejects because
+    #       the agent's last-issued recommendation is still incomplete.
+    #       Empirically (2026-05-25 conv-008 with d8de433): UI fill made
+    #       backend.spec.volume_ml=192, but 5x 确认 clicks + chat fallback
+    #       all failed to advance phase. Root cause: the nudge path that
+    #       gets agent to re-issue a complete recommendation was skipped
+    #       because phase had already moved past not_started.
+    # The nudge body is chemistry-rich natural language (volume/ratio/
+    # solvent/container) so admittance treats it as chemistry intent and
+    # lets it through, even at collecting_spec.
     ph, spec, missing = record("pre_engage")
     rec["nudge_sent"] = False
-    if ph in (None, "not_started"):
+    needs_nudge = ph in (None, "not_started") or (
+        ph == "collecting_spec" and missing)
+    if needs_nudge:
         nudge = _compose_re_nudge(brief, volume_ml)
-        log(f"  [re-finalize] phase={ph}, volume_choice={volume_ml}; "
-            f"sending full nudge: {nudge[:80]}...")
+        log(f"  [re-finalize] phase={ph} missing={missing} "
+            f"volume_choice={volume_ml}; sending nudge: {nudge[:80]}...")
         try:
             send_chat(page, nudge)
             rec["nudge_sent"] = True
@@ -797,18 +815,32 @@ def _drive_re_after_cc(page, brief, session_id, args, submitted_tasks):
             rec["nudge_error"] = str(exc)
             rec["final_stage"] = "re_spec_failed"
             return rec
+        # Success criteria after nudge: either phase advanced to
+        # collecting_params (rare — agent auto-confirms) OR spec is complete
+        # at collecting_spec (the common case — agent re-issued full
+        # recommendation, waiting for our 确认 click). Old code only
+        # checked phase, which works for engagement-from-not_started but
+        # not for completing-an-incomplete-spec at collecting_spec.
         engage_deadline = time.time() + 180
+        engaged = False
         while time.time() < engage_deadline:
             time.sleep(6)
             ph, spec, missing = record("waiting_engage")
-            if ph in ("collecting_spec", "collecting_params"):
+            if ph == "collecting_params":
+                engaged = True
                 break
-        else:
-            log("  [re-finalize] TIMEOUT engaging agent (phase still not_started)")
-            rec["final_stage"] = "re_spec_failed"
-            return rec
+            if ph == "collecting_spec" and not missing:
+                engaged = True
+                break
+        if not engaged:
+            # Don't bail; fall through to UI-fill + confirm as a final
+            # backup. The nudge may still have helped (agent partially
+            # updated spec); UI fill closes the remaining gap.
+            log(f"  [re-finalize] nudge engage budget exhausted; phase={ph} "
+                f"missing={missing} — falling through to UI-fill backup")
     else:
-        log(f"  [re-finalize] phase={ph} already past not_started; skipping nudge")
+        log(f"  [re-finalize] phase={ph} spec complete (or past collecting_spec); "
+            f"skipping nudge")
 
     # ---- Phase B: brief grace for agent to populate spec ---------------
     # If agent ingests the nudge / brief turns fast, spec may already be
