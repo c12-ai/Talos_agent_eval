@@ -2,9 +2,13 @@
 """
 Smoke runner for the 2026-05-18 link-validation batch.
 
-Drives conv briefs through the live TALOS frontend via the Mac Tailscale relay
-(100.84.102.34), captures per-turn agent output + tool calls from Phoenix root
-spans, and snapshots workflow-state. Phoenix annotation is a SEPARATE pass.
+Drives conv briefs through the live TALOS frontend via the Mac Tailscale relay,
+captures per-turn agent output + tool calls from Phoenix root spans, and
+snapshots workflow-state. Phoenix annotation is a SEPARATE pass.
+
+Endpoints (relay IP changes whenever Tailscale re-logs — never hardcode it):
+- Set TALOS_BASE / PHOENIX_BASE env vars, or pass --talos-base / --phoenix-base.
+- Precedence: CLI flag > env var > fallback default (the default may be stale).
 
 Safety:
 - --allow-dispatch is required before any final lab-submit panel click.
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -35,8 +40,14 @@ def cst_stamp(fmt):
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-TALOS_BASE = "http://100.84.102.34:8080"
-PHOENIX_BASE = "http://100.84.102.34:6006"
+# Endpoint bases. The relay IP is NOT stable (Mac Tailscale re-log rotates it),
+# so resolve from env at import time; --talos-base / --phoenix-base can still
+# override in main(). The literal fallbacks are last-resort only — see
+# SMOKE_README "网络前置".
+DEFAULT_TALOS_BASE = "http://100.84.102.34:8080"
+DEFAULT_PHOENIX_BASE = "http://100.84.102.34:6006"
+TALOS_BASE = os.environ.get("TALOS_BASE", DEFAULT_TALOS_BASE).rstrip("/")
+PHOENIX_BASE = os.environ.get("PHOENIX_BASE", DEFAULT_PHOENIX_BASE).rstrip("/")
 PROJECT_ID = "UHJvamVjdDoy"
 TLC_IMAGE = str(ROOT / "demo.jpeg")
 DATASET = ROOT / "agent_eval_dataset.json"
@@ -1262,6 +1273,7 @@ def _collect_spans(brief, started, ended):
 
 
 def main():
+    global TALOS_BASE, PHOENIX_BASE
     ap = argparse.ArgumentParser()
     ap.add_argument("conv_ids", nargs="+")
     ap.add_argument("--allow-dispatch", action="store_true")
@@ -1270,11 +1282,23 @@ def main():
     ap.add_argument("--slot-id", default="bic_09B_l4_002")
     ap.add_argument("--slot-label", default="备料架L4层样品柱002位")
     ap.add_argument("--out", default="")
+    ap.add_argument("--talos-base", default=None,
+                    help="TALOS API base URL; overrides $TALOS_BASE. "
+                         "Relay IP rotates — set this each session.")
+    ap.add_argument("--phoenix-base", default=None,
+                    help="Phoenix base URL; overrides $PHOENIX_BASE.")
     args = ap.parse_args()
+
+    # Precedence: CLI flag > env var (already applied at import) > default.
+    if args.talos_base:
+        TALOS_BASE = args.talos_base.rstrip("/")
+    if args.phoenix_base:
+        PHOENIX_BASE = args.phoenix_base.rstrip("/")
 
     briefs = build_briefs(args.conv_ids)
     Path("/tmp/eval_briefs.json").write_text(json.dumps(briefs, ensure_ascii=False))
     log(f"targets={args.conv_ids} allow_dispatch={args.allow_dispatch}")
+    log(f"endpoints: TALOS_BASE={TALOS_BASE} PHOENIX_BASE={PHOENIX_BASE}")
 
     results = {}
     with sync_playwright() as p:

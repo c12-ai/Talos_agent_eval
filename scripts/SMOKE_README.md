@@ -20,18 +20,25 @@ Python ≥ 3.10。
 
 ## 网络前置
 
-脚本访问两个 IP/端口：
+脚本访问两个服务：TALOS API（默认 `:8080`）、Phoenix（默认 `:6006`）。这两个 base URL **不再写死在脚本里**——relay IP 每次 Tailscale 重登就换，写死会过期。
 
-| 服务 | URL（写死在 `smoke_runner_20260518.py`） |
-|---|---|
-| TALOS API | `http://100.84.102.34:8080` |
-| Phoenix | `http://100.84.102.34:6006` |
+**配置方式**（优先级：CLI flag > 环境变量 > 脚本里的 fallback 默认值）：
 
-`100.84.102.34` 是**当前 Mac 的 Tailscale IP**，由 Mac 上 `ssh -L 100.84.102.34:{8080,6006}:localhost:{8080,6006} newbox` 中转。如果 Codex 不在能直连这台 Mac 的网络下：
+```bash
+# 方式 A：环境变量（推荐，一次 export 全程生效；judge 也读同样的 PHOENIX_BASE）
+export TALOS_BASE=http://<relay-ip>:8080
+export PHOENIX_BASE=http://<relay-ip>:6006
+python3 scripts/smoke_runner_20260518.py conv-008
 
-- 改 `TALOS_BASE` / `PHOENIX_BASE`（同时改 `scripts/judge_20260518.py` 里的 `PHOENIX_BASE`）
-- 或在 Codex host 上建等价隧道
-- IP 还会变（Tailscale 重登就换）；变了先 `tailscale ip -4` 重读
+# 方式 B：CLI flag（单次覆盖）
+python3 scripts/smoke_runner_20260518.py conv-008 \
+    --talos-base http://<relay-ip>:8080 --phoenix-base http://<relay-ip>:6006
+python3 scripts/judge_20260518.py <run.json> --phoenix-base http://<relay-ip>:6006
+```
+
+`<relay-ip>` 是**当前 Mac 的 Tailscale IP**，由 Mac 上 `ssh -L <relay-ip>:{8080,6006}:localhost:{8080,6006} newbox` 中转。IP 会变（Tailscale 重登就换）；变了先在 Mac 上 `tailscale ip -4` 重读，再 export / 传 flag——**不用改脚本**。脚本里的 fallback 默认值（`smoke_runner_20260518.py` 顶部 `DEFAULT_TALOS_BASE` / `DEFAULT_PHOENIX_BASE`）是最后兜底，大概率已经过期，别依赖它。
+
+启动时脚本会打印一行 `endpoints: TALOS_BASE=... PHOENIX_BASE=...`，跑之前扫一眼确认连的是对的 IP。
 
 ## Lab 前置
 
@@ -66,6 +73,8 @@ CLI args:
 | `--slot-id` | `bic_09B_l4_002` | CC 用的样品柱位 |
 | `--slot-label` | `备料架L4层样品柱002位` | 同上的中文 label |
 | `--out` | 无 | 不指定就**不写文件**；指定路径会同时写 JSON 诊断 |
+| `--talos-base` | `$TALOS_BASE` 或 fallback | TALOS API base URL；覆盖环境变量。relay IP 变了用这个传 |
+| `--phoenix-base` | `$PHOENIX_BASE` 或 fallback | Phoenix base URL；覆盖环境变量 |
 
 ## 输出
 

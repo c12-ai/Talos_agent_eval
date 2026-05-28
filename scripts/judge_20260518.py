@@ -14,13 +14,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
-PHOENIX_BASE = "http://100.84.102.34:6006"
+# Phoenix relay IP rotates (Mac Tailscale re-log). Resolve from env at import;
+# --phoenix-base can override in main(). Fallback default may be stale.
+DEFAULT_PHOENIX_BASE = "http://100.84.102.34:6006"
+PHOENIX_BASE = os.environ.get("PHOENIX_BASE", DEFAULT_PHOENIX_BASE).rstrip("/")
 PROJECT_ID = "UHJvamVjdDoy"
 REQ = {"proxies": {"http": None, "https": None}, "timeout": 20}
 
@@ -146,11 +150,17 @@ def post_annotation(a):
 
 
 def main():
+    global PHOENIX_BASE
     ap = argparse.ArgumentParser()
     ap.add_argument("run_json")
     ap.add_argument("--write", action="store_true",
                     help="POST to Phoenix (outward-facing; requires human approval)")
+    ap.add_argument("--phoenix-base", default=None,
+                    help="Phoenix base URL; overrides $PHOENIX_BASE. "
+                         "Relay IP rotates — set this each session.")
     args = ap.parse_args()
+    if args.phoenix_base:
+        PHOENIX_BASE = args.phoenix_base.rstrip("/")
 
     data = json.loads(Path(args.run_json).read_text())
     all_anns = []
