@@ -402,7 +402,11 @@ def set_column_type_12g(page: Page) -> None:
             )
             sleep(0.5)
             option = page.get_by_text("12g", exact=False).last
-            if option.is_visible(timeout=2000):
+            # 2s→8s: high-latency hosts can miss the dropdown option's render
+            # window; a miss here means 12g isn't selected → CC dispatches the
+            # wrong column spec (§4.3 violation). Timeout-only bump, no logic
+            # change.
+            if option.is_visible(timeout=8000):
                 option.click()
                 sleep(1)
                 log("selected column type 12g from custom selector")

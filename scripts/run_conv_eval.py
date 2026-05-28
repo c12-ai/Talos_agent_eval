@@ -329,7 +329,9 @@ def submit_re_in_panel(page: Page) -> None:
     # Add flask
     try:
         add_btn = page.get_by_text("+ 添加茄形瓶", exact=False).first
-        if add_btn.count() and add_btn.is_visible(timeout=2000):
+        # 2s→8s: high-latency hosts miss the button's first-render 2s window;
+        # a missed click silently skips flask-add.
+        if add_btn.count() and add_btn.is_visible(timeout=8000):
             add_btn.click()
             sleep(1.5)
             log("  clicked '+ 添加茄形瓶'")

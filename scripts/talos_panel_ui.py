@@ -462,7 +462,10 @@ def submit_re_via_ui(page) -> bool:
     # Add flask
     try:
         add_btn = page.get_by_text("+ 添加茄形瓶", exact=False).first
-        if add_btn.count() and add_btn.is_visible(timeout=2000):
+        # 2s→8s: on high-latency hosts the button's first render misses a 2s
+        # window, and a missed click silently skips flask-add (downstream
+        # '瓶 1' wait then times out).
+        if add_btn.count() and add_btn.is_visible(timeout=8000):
             add_btn.click()
             time.sleep(1.5)
             print("[UI] Clicked '+ 添加茄形瓶'")
