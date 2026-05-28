@@ -75,6 +75,19 @@ CLI args:
 | `--out` | 无 | 不指定就**不写文件**；指定路径会同时写 JSON 诊断 |
 | `--talos-base` | `$TALOS_BASE` 或 fallback | TALOS API base URL；覆盖环境变量。relay IP 变了用这个传 |
 | `--phoenix-base` | `$PHOENIX_BASE` 或 fallback | Phoenix base URL；覆盖环境变量 |
+| `--no-user-sim` | 默认开（有 key 才生效） | 关掉 LLM 用户模拟器，逐字回放脚本 turn（旧行为） |
+| `--user-sim-model` | `$USER_SIM_MODEL` 或 `claude-opus-4-7` | 用户模拟器用的模型 |
+
+## 用户模拟器（user-sim）
+
+driver 默认**不逐字念稿**：信息类聊天 turn 会先读 TALOS 的真实回复，再用 Claude 生成贴合上下文的用户回复，brief 里那条 turn 只当「这步用户想表达啥 / 手上有哪些信息」的参考。解决的问题：以前 agent 问 A，脚本下一句是 B，driver 照样发 B（"agent 问天气，脚本写公交站，就发公交站"）。
+
+- **引擎**：`scripts/user_sim.py`，官方 anthropic SDK。需要 `ANTHROPIC_API_KEY`（`pip install anthropic`）。**没 key / SDK 不在 / 调用失败 → 自动回落到脚本原文**，确定性路径照常跑（启动日志会打 `user-sim ... falling back to scripted turns`）。
+- **只改聊天文案，不碰 stage 机**：面板动作（批准/确认/下发）和 stage 流转**仍然用脚本里的 `ut` 驱动**，不是用模拟器生成的文本。所以面板确定性逻辑一点没动。开场第一句（k==0）和 `dispatch_intent` 命中的 turn（含 `可以`/`下发`/`提交` 等）保持脚本原文。
+- **配置**：`export ANTHROPIC_API_KEY=...`；模型默认 `claude-opus-4-7`，要省钱用 `--user-sim-model claude-haiku-4-5` 或 `export USER_SIM_MODEL=claude-sonnet-4-6`。
+- **关掉**：`--no-user-sim` 回到逐字回放。
+- **输出**：被改写的 turn 在 JSON 里多 `scripted_text` / `sim_text` / `sim_agent_reply_seen` 三个字段，stdout 打 `[user-sim] scripted=... → sent=...`，便于核对模拟器有没有跑偏。
+- agent 最新回复靠 `.chat-col` innerText 的逐 turn 增量 diff 抽（`_new_agent_text`），selector 失效时回落到整页 body text。
 
 ## 输出
 
@@ -132,6 +145,7 @@ Relay 偶尔会瞬时 read timeout（~每小时 1-2 次）。如果脚本运行�
 ```
 scripts/
   smoke_runner_20260518.py        ← 主入口
+  user_sim.py                     ← LLM 用户模拟器（Claude；被主入口 import，无 key 自动回落）
   talos_panel_ui.py               ← 面板 UI helpers（被主入口 import）
   talos_re_frontend_runner.py     ← state-driven RE 驱动（被 panel_ui 委托）
   talos_cc_frontend_runner.py     ← CC 驱动 + 通用 helpers

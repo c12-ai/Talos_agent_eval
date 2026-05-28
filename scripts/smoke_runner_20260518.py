@@ -353,6 +353,38 @@ def body_text(page):
         return ""
 
 
+def _chat_col_text(page):
+    """innerText of the conversation column only (excludes the right-side
+    panel). Used to extract the agent's latest reply for the user-sim
+    without panel noise. Falls back to whole-body text if .chat-col isn't
+    found."""
+    for sel in (".chat-col", "div.chat-col", "[class*='chat-col']"):
+        try:
+            loc = page.locator(sel).first
+            if loc.count():
+                return loc.inner_text(timeout=2000)
+        except Exception:
+            continue
+    return body_text(page)
+
+
+def _new_agent_text(prev, cur):
+    """Return the text newly added to the chat column since `prev` — i.e.
+    the agent's latest reply. Line-based suffix diff so minor re-renders of
+    earlier lines don't swallow the new content. Capped to the last 2000
+    chars (an agent turn is never longer in practice)."""
+    cur = cur or ""
+    if not cur:
+        return ""
+    if not prev:
+        return cur[-2000:].strip()
+    pl, cl = prev.splitlines(), cur.splitlines()
+    i = 0
+    while i < len(pl) and i < len(cl) and pl[i] == cl[i]:
+        i += 1
+    return "\n".join(cl[i:]).strip()[-2000:]
+
+
 def _re_button_visible(page) -> bool:
     """True only when the '+ 添加茄形瓶' button is rendered (i.e. the step is
     active), not just when the string appears as a pending timeline label."""
@@ -396,6 +428,15 @@ def run_conv(brief, browser, args):
     def dispatch_intent(t):
         return t in PANEL_ACTION_TEXTS or any(w in t for w in ["下发", "开始", "就按", "提交"])
 
+    # User-sim state: when a Claude client is available, informational turns
+    # are generated to fit TALOS's actual reply instead of replayed verbatim.
+    sim_client = getattr(args, "_user_sim_client", None)
+    sim_model = getattr(args, "user_sim_model", None)
+    sim_on = sim_client is not None
+    from user_sim import decide_reply
+    prev_chat = ""
+    sim_history = []
+
     for k, turn in enumerate(brief["user_turns"]):
         if page.is_closed():
             break
@@ -424,11 +465,39 @@ def run_conv(brief, browser, args):
             stage = "re_spec"
             log(f"  [handoff] stage advanced to re_spec")
 
-        send_chat(page, ut)
+        rec = {**turn, "panel_action": None, "stage_before": stage}
+
+        # Decide what to actually type. For informational turns we let the
+        # user-sim adapt to TALOS's real reply (the scripted `ut` is only a
+        # hint of intent). We keep the scripted text verbatim for: the
+        # opening request (k==0, no prior agent reply), and panel-action /
+        # dispatch turns (their wording must carry the intent the stage
+        # machine keys off — and that machine still uses `ut`, not the typed
+        # text, so panel logic is unaffected either way).
+        sent_text = ut
+        is_panel_action = (ut in PANEL_ACTION_TEXTS) or dispatch_intent(ut)
+        if sim_on and k > 0 and not is_panel_action:
+            agent_reply = _new_agent_text(prev_chat, _chat_col_text(page))
+            if agent_reply:
+                sim_history.append(("agent", agent_reply))
+            gen = decide_reply(sim_client, brief, ut, agent_reply, sim_history,
+                               model=sim_model)
+            if gen:
+                sent_text = gen
+                rec["scripted_text"] = ut
+                rec["sim_text"] = gen
+                rec["sim_agent_reply_seen"] = agent_reply[:300]
+                log(f"  [user-sim] scripted={ut[:40]!r} → sent={gen[:70]!r}")
+            else:
+                log(f"  [user-sim] gen failed/empty — scripted {ut[:40]!r}")
+
+        send_chat(page, sent_text)
         wait_textarea_enabled(page, timeout=150)
         time.sleep(2)
+        if sim_on:
+            sim_history.append(("user", sent_text))
+            prev_chat = _chat_col_text(page)
 
-        rec = {**turn, "panel_action": None, "stage_before": stage}
         bt = body_text(page)
 
         if stage == "await_plan" and "批准方案" in bt:
@@ -1328,6 +1397,13 @@ def main():
                          "Relay IP rotates — set this each session.")
     ap.add_argument("--phoenix-base", default=None,
                     help="Phoenix base URL; overrides $PHOENIX_BASE.")
+    ap.add_argument("--no-user-sim", dest="user_sim", action="store_false",
+                    default=True,
+                    help="Disable the LLM user-simulator; replay scripted "
+                         "turns verbatim (the old behavior).")
+    ap.add_argument("--user-sim-model", default=None,
+                    help="Model for the user-simulator; overrides "
+                         "$USER_SIM_MODEL (default claude-opus-4-7).")
     args = ap.parse_args()
 
     # Precedence: CLI flag > env var (already applied at import) > default.
@@ -1335,6 +1411,21 @@ def main():
         TALOS_BASE = args.talos_base.rstrip("/")
     if args.phoenix_base:
         PHOENIX_BASE = args.phoenix_base.rstrip("/")
+
+    # Build the user-sim client once (None when --no-user-sim, or when
+    # ANTHROPIC_API_KEY / the anthropic SDK is unavailable → runner falls
+    # back to scripted turns). Stash on args so run_conv can read it.
+    args._user_sim_client = None
+    if args.user_sim:
+        from user_sim import make_client, DEFAULT_MODEL
+        args._user_sim_client = make_client()
+        if args._user_sim_client is None:
+            log("user-sim requested but ANTHROPIC_API_KEY / anthropic SDK "
+                "unavailable — falling back to scripted turns")
+        else:
+            log(f"user-sim ON (model={args.user_sim_model or os.environ.get('USER_SIM_MODEL') or DEFAULT_MODEL})")
+    else:
+        log("user-sim OFF (--no-user-sim) — replaying scripted turns verbatim")
 
     briefs = build_briefs(args.conv_ids)
     Path("/tmp/eval_briefs.json").write_text(json.dumps(briefs, ensure_ascii=False))

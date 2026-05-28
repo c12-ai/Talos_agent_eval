@@ -1,2 +1,3 @@
 playwright>=1.40
 requests>=2.31
+anthropic>=0.69   # LLM user-simulator (scripts/user_sim.py); optional — runner falls back to scripted turns if absent
