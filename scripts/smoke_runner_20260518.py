@@ -267,26 +267,11 @@ def send_chat(page, text, max_retries=3):
     raise RuntimeError(f"send_chat failed to post message after {max_retries} retries: {text[:60]}")
 
 
-def new_session(page):
-    for t in ["新对话", "New Chat"]:
-        try:
-            b = page.get_by_text(t, exact=True).first
-            if b.count() and b.is_visible(timeout=2000):
-                b.click()
-                # The click triggers a SPA route change. On slower hosts the
-                # bare time.sleep(2) wasn't enough and the subsequent
-                # page.evaluate hit "Execution context was destroyed". Wait
-                # for the DOM to settle first.
-                try:
-                    page.wait_for_load_state("domcontentloaded", timeout=10000)
-                except Exception:
-                    pass
-                time.sleep(2)
-                break
-        except Exception:
-            continue
-    # Retry the evaluate a few times: even after domcontentloaded the SPA may
-    # still be hydrating and a context-destroyed race can fire once.
+def _read_session_id(page) -> str:
+    """Read the active session id from localStorage, retrying through SPA
+    hydration / context-destroyed races. Returns '' when none is present
+    (NOT 'unknown' — callers must be able to tell "no session" apart from a
+    real id)."""
     last_exc: Exception | None = None
     for _ in range(5):
         try:
@@ -294,7 +279,7 @@ def new_session(page):
                 "keys => { for (const k of keys){ const v=localStorage.getItem(k); if(v) return v;} return ''; }",
                 SESSION_KEYS,
             )
-            return sid or "unknown"
+            return sid or ""
         except Exception as exc:
             msg = str(exc)
             if "Execution context was destroyed" in msg or "navigation" in msg.lower():
@@ -302,7 +287,63 @@ def new_session(page):
                 time.sleep(1.5)
                 continue
             raise
-    raise last_exc if last_exc else RuntimeError("new_session: evaluate failed")
+    if last_exc:
+        raise last_exc
+    return ""
+
+
+def new_session(page, *, attempts: int = 3, click_timeout: int = 15000) -> str:
+    """Start a fresh TALOS session and VERIFY we actually got a new id.
+
+    Bug this guards (2026-05-25): the old code clicked '新对话', then read
+    localStorage and returned whatever was there. Two silent-failure modes:
+      1. '新对话' didn't render inside the 2s visibility window (high-latency
+         host) → no click happened → it returned the PREVIOUS session id.
+      2. The click fired but the SPA didn't mint a new session → it returned
+         the old id.
+    Either way the whole conv then ran against a stale session, producing
+    confusing results with no error.
+
+    Now: snapshot the id before clicking, click, then require the id to have
+    changed (or gone empty→populated). Retry the click+verify a few times;
+    raise if a new session can't be confirmed — never silently reuse the old
+    id. The visibility window is also bumped 2s→15s for slow hosts.
+    """
+    before_id = _read_session_id(page)
+    for attempt in range(1, attempts + 1):
+        clicked = False
+        for t in ["新对话", "New Chat"]:
+            try:
+                b = page.get_by_text(t, exact=True).first
+                if b.count() and b.is_visible(timeout=click_timeout):
+                    b.click()
+                    # The click triggers a SPA route change; wait for DOM to
+                    # settle before the localStorage read (else page.evaluate
+                    # races "Execution context was destroyed").
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            log(f"  [new_session] attempt {attempt}/{attempts}: '新对话' not clickable "
+                f"within {click_timeout}ms — retrying")
+            time.sleep(2)
+            continue
+        after_id = _read_session_id(page)
+        # Accept either empty→populated (fresh context) or a real change.
+        if after_id and (not before_id or after_id != before_id):
+            return after_id
+        log(f"  [new_session] attempt {attempt}/{attempts}: session id did NOT change "
+            f"(before={before_id or '∅'!r} after={after_id or '∅'!r}) — retrying")
+        time.sleep(2)
+    raise RuntimeError(
+        f"new_session: could not confirm a NEW session after {attempts} attempts "
+        f"(before={before_id or '∅'!r}); refusing to silently reuse the old id")
 
 
 def body_text(page):

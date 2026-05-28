@@ -121,8 +121,11 @@ CLI args:
 | `blocked` + `dispatch_gated=True` | 没 `--allow-dispatch` | 正常 |
 | `cc_spec_violation` 非 None | `column_type` 在 CC 终态不是 `silica_12g` | 产品 bug（guide §4.3 硬规） |
 | `planner_mismatch=True` | plan 缺 cc 或 re executor | 产品 bug |
+| `ERROR new_session: could not confirm a NEW session ...` | 点 `新对话` 后没拿到新 session id（按钮没渲染出来 / SPA 没建会话） | 脚本**故意报错不静默**。先看是不是 `新对话` 按钮在 `click_timeout`（默认 15s）内没出来——高延迟就调大；如果按钮点了但 id 不变，是 SPA 建会话不可靠，归产品 |
 
 Relay 偶尔会瞬时 read timeout（~每小时 1-2 次）。如果脚本运行中卡 15s 又恢复，那是 relay；不要把这类报错算到产品头上。
+
+`new_session` 现在会**校验拿到的是新 session**（记点击前 id → 点 → 断言 id 变了 / 空→有），拿不到就重试 `attempts`（默认 3）次再 raise，绝不静默沿用旧 id。可视窗口从 2s 提到 15s（`click_timeout`）。历史上"整个 conv 跑在旧 session 上、结果全错却无报错"就是这个洞。
 
 ## 文件依赖
 
