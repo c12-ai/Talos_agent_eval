@@ -142,3 +142,5 @@ demo.jpeg                         ← CC TLC 占位图
 ```
 
 不要碰：`talos_re_frontend_runner.py`、`talos_cc_frontend_runner.py`——它们是 proven baseline。`talos_panel_ui.py` 的 RE 部分委托给它们。
+
+**唯一例外：纯 timeout 数值的放宽**。把 `is_visible(timeout=...)` / `wait_for(timeout=...)` 这类等待窗口**调大**（只改数字、不动 selector / 逻辑 / 顺序）是允许的——它单调更宽容：原来窗口内能命中的仍命中，原来错过的现在能接住，不可能让能跑的路径变坏。改的时候在 commit 里点名是 baseline 文件 + 纯 timeout bump 即可。**调小 timeout 或任何 selector/逻辑改动仍然禁止。**（2026-05-25 `talos_cc_frontend_runner.py` 12g 下拉 2s→8s 就是这个例外。）
