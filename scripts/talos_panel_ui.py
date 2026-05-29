@@ -220,7 +220,19 @@ def _select_cartridge(page, slot_id: str = "bic_09B_l4_002") -> bool:
 
 
 def _select_cartridge_once(page, slot_id: str = "bic_09B_l4_002") -> bool:
-    """One pass of the 3-layer cartridge-selection fallback."""
+    """One pass of the 3-layer cartridge-selection fallback.
+
+    Must be side-effect-free across passes: _select_cartridge retries this on a
+    budget, so a custom combobox left open by a previous pass would be toggled
+    CLOSED by this pass's re-click (and its overlay could intercept other
+    clicks). Reset to a known-closed state first, and close the combobox again
+    if Layer 2 opens it without finding the option.
+    """
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+
     # Layer 1: native select
     selects = page.locator("select")
     try:
@@ -255,6 +267,12 @@ def _select_cartridge_once(page, slot_id: str = "bic_09B_l4_002") -> bool:
                 print("[UI] Selected cartridge via combobox")
                 time.sleep(1)
                 return True
+            # Option not listed yet -> close the dropdown we just opened so the
+            # next retry (and Layer 3 below) starts from a known-closed state.
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
     except Exception:
         pass
 
