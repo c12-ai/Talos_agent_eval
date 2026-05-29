@@ -12,11 +12,20 @@ anticipate, the runner still fired the next scripted line ("agent asks about
 the weather, script says 'where's the bus stop', runner sends 'where's the
 bus stop'"). The script is a reference, not a teleprompter.
 
-Engine: Claude via the official Anthropic SDK. Reads the API key from
-WWY_ANTHROPIC_API_KEY (project-scoped, preferred) or ANTHROPIC_API_KEY.
-If the key/SDK is unavailable or any call fails, `make_client` returns None
-and `decide_reply` returns None — callers fall back to the scripted turn, so
-the deterministic path still works with no key.
+Engines (pick with USER_SIM_ENGINE / --user-sim-engine):
+- `codex`  — shell out to `codex exec --output-last-message` (OpenAI-backed,
+             uses the codex CLI's own auth/quota; NO Anthropic key needed).
+- `claude` — shell out to `claude -p` (Claude Code print mode; subscription
+             auth).
+- `api`    — Anthropic Messages API via the SDK; key from
+             WWY_ANTHROPIC_API_KEY (preferred) or ANTHROPIC_API_KEY.
+
+CLI engines (codex/claude) are the sanctioned non-interactive mode of those
+tools — no API key wrangling, and they draw on whatever quota the CLI is
+already logged into (e.g. codex → OpenAI, sidestepping Anthropic rate
+limits). If the chosen engine is unavailable or a call fails, `make_engine`
+/ `decide_reply` return None and callers fall back to the scripted turn, so
+the deterministic path always works.
 
 Scope: only the chat *wording* is generated here. The smoke runner's
 stage/panel logic still keys off the scripted `ut`, so deterministic panel
@@ -25,16 +34,25 @@ actions (approve plan / confirm spec / dispatch) are unaffected.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import tempfile
 from typing import Optional
 
-# Default model. Per the claude-api skill, default to the most capable model;
-# override per-run with USER_SIM_MODEL or --user-sim-model (Haiku/Sonnet are
-# cheaper if cost matters: claude-haiku-4-5 / claude-sonnet-4-6).
+# Default Anthropic model for the `api` engine. CLI engines use whatever
+# model their own config selects (codex → its configured model; claude →
+# the CLI default), so --user-sim-model only affects the api engine.
 DEFAULT_MODEL = "claude-opus-4-7"
 
-# Frozen system prompt — kept byte-stable so prompt caching can reuse it
-# across turns/convs. Do NOT interpolate per-turn data here (that would
-# invalidate the cache); per-conv facts go in the user message.
+# Default engine. `api` keeps the original behavior; set USER_SIM_ENGINE or
+# pass --user-sim-engine to switch.
+DEFAULT_ENGINE = "codex"
+
+# Per-call timeout for CLI engines (codex boots + reasons; be generous).
+_CLI_TIMEOUT_S = 150
+
+# Frozen system prompt — for the api engine it's the cached system block;
+# for CLI engines it's prepended to the per-turn prompt. Keep byte-stable.
 _SYSTEM = """你在扮演一名化学实验室研究员，正在和实验室助手 TALOS 对话，完成一次纯化实验（过柱 / 旋蒸 / 分析 / 称重等）。
 
 你的任务：**读 TALOS 刚刚说的话，自然地回一句把实验推进下去**。下面会给你一份「你手上的实验信息」和「这一步你原本打算说的话」，后者只是参考，不要照念——要贴合 TALOS 实际说的内容。
@@ -48,10 +66,10 @@ _SYSTEM = """你在扮演一名化学实验室研究员，正在和实验室助�
 - **只输出你要发给 TALOS 的那一句话**，不要加引号、不要解释、不要写「我会说：」之类。"""
 
 
-# API key env vars, in priority order. WWY_ANTHROPIC_API_KEY is the
+# --------------------------------------------------------------------------- key
+# API-engine key env vars, priority order. WWY_ANTHROPIC_API_KEY is the
 # project-scoped key — set it so this eval uses a dedicated key without
-# colliding with a generic ANTHROPIC_API_KEY that other tools on the box may
-# already use. Falls back to the SDK's default ANTHROPIC_API_KEY.
+# colliding with a generic ANTHROPIC_API_KEY other tools may use.
 _KEY_ENV_VARS = ("WWY_ANTHROPIC_API_KEY", "wwy_anthropic_api_key",
                  "ANTHROPIC_API_KEY")
 
@@ -64,26 +82,64 @@ def _resolve_api_key():
     return None
 
 
+# --------------------------------------------------------------------------- engine
+def resolve_engine(prefer: Optional[str] = None) -> str:
+    """Engine name: explicit arg > USER_SIM_ENGINE env > DEFAULT_ENGINE."""
+    return (prefer or os.environ.get("USER_SIM_ENGINE") or DEFAULT_ENGINE).strip().lower()
+
+
+def make_engine(prefer: Optional[str] = None) -> Optional[dict]:
+    """Return an opaque engine handle, or None when the engine is
+    unavailable (→ caller falls back to scripted turns).
+
+    Handle shapes:
+      {"kind": "api", "client": <anthropic.Anthropic>}
+      {"kind": "codex"}
+      {"kind": "claude"}
+    """
+    engine = resolve_engine(prefer)
+
+    if engine == "codex":
+        if shutil.which("codex"):
+            return {"kind": "codex"}
+        print("[user-sim] engine=codex but `codex` not on PATH", flush=True)
+        return None
+
+    if engine == "claude":
+        if shutil.which("claude"):
+            return {"kind": "claude"}
+        print("[user-sim] engine=claude but `claude` not on PATH", flush=True)
+        return None
+
+    if engine == "api":
+        key = _resolve_api_key()
+        if not key:
+            return None
+        try:
+            import anthropic
+        except Exception:
+            return None
+        try:
+            if key.startswith("sk-ant-oat"):
+                # OAuth access tokens authenticate via Authorization: Bearer
+                # (auth_token=), not the x-api-key header (api_key=).
+                client = anthropic.Anthropic(auth_token=key)
+            else:
+                client = anthropic.Anthropic(api_key=key)
+        except Exception:
+            return None
+        return {"kind": "api", "client": client}
+
+    print(f"[user-sim] unknown engine {engine!r}", flush=True)
+    return None
+
+
+# Back-compat alias: older callers used make_client() for the api engine.
 def make_client():
-    """Return an Anthropic client, or None when the SDK or API key is absent.
-
-    None is the signal to callers that user-sim is unavailable → fall back
-    to scripted turns. Uses the project key WWY_ANTHROPIC_API_KEY first,
-    then ANTHROPIC_API_KEY; passes it explicitly so the SDK uses whichever
-    we resolved."""
-    key = _resolve_api_key()
-    if not key:
-        return None
-    try:
-        import anthropic
-    except Exception:
-        return None
-    try:
-        return anthropic.Anthropic(api_key=key)
-    except Exception:
-        return None
+    return make_engine("api")
 
 
+# --------------------------------------------------------------------------- prompt
 def _brief_facts(brief) -> str:
     """Flatten the brief into a 'what the user knows / plans to say' block.
 
@@ -101,31 +157,13 @@ def _brief_facts(brief) -> str:
     return head + body
 
 
-def decide_reply(client, brief, scripted_turn, agent_reply, history,
-                 *, model: Optional[str] = None) -> Optional[str]:
-    """Generate the user's next chat message.
-
-    Args:
-      client: Anthropic client from make_client() (None → returns None).
-      brief: the conv brief (scene + user_turns).
-      scripted_turn: the dataset's intended text for this step (reference).
-      agent_reply: TALOS's latest reply text (what we're responding to).
-      history: list of (role, text) tuples, role in {"user","agent"}.
-      model: override model id.
-
-    Returns the generated reply text, or None on any failure (caller falls
-    back to scripted_turn)."""
-    if client is None:
-        return None
-    model = model or os.environ.get("USER_SIM_MODEL") or DEFAULT_MODEL
-
+def _user_block(brief, scripted_turn, agent_reply, history) -> str:
     convo = ""
     for role, text in (history or [])[-8:]:
         who = "你" if role == "user" else "TALOS"
         convo += f"{who}：{text}\n"
-
     intent = (scripted_turn or "").strip() or "（无特定计划，顺着对话走）"
-    user_block = (
+    return (
         f"{_brief_facts(brief)}\n\n"
         f"——\n"
         f"最近的对话：\n{convo or '（还没开始）'}\n"
@@ -134,10 +172,10 @@ def decide_reply(client, brief, scripted_turn, agent_reply, history,
         f"现在请输出你这一句要回复 TALOS 的话："
     )
 
+
+# --------------------------------------------------------------------------- engine calls
+def _call_api(client, user_block, model) -> Optional[str]:
     try:
-        # No thinking / sampling params — opus-4-7 runs thinking-off by
-        # default and 400s on temperature/top_p/top_k. cache_control on the
-        # frozen system prompt lets repeated turns reuse it.
         resp = client.messages.create(
             model=model,
             max_tokens=300,
@@ -146,9 +184,82 @@ def decide_reply(client, brief, scripted_turn, agent_reply, history,
             messages=[{"role": "user", "content": user_block}],
         )
     except Exception as exc:
-        print(f"[user-sim] decide_reply API error: {exc}", flush=True)
+        print(f"[user-sim] api error: {exc}", flush=True)
+        return None
+    text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
+    return (text or "").strip() or None
+
+
+def _call_codex(prompt) -> Optional[str]:
+    """codex exec, final message captured via --output-last-message (avoids
+    the banner / token-footer noise on stdout)."""
+    if not shutil.which("codex"):
+        return None
+    fd, path = tempfile.mkstemp(prefix="user_sim_codex_", suffix=".txt")
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["codex", "exec", "--output-last-message", path, prompt],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=_CLI_TIMEOUT_S, check=False,
+        )
+        with open(path, "r", encoding="utf-8") as f:
+            return (f.read().strip() or None)
+    except Exception as exc:
+        print(f"[user-sim] codex error: {exc}", flush=True)
+        return None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _call_claude_cli(prompt) -> Optional[str]:
+    """claude -p (print mode) — prints the reply text to stdout."""
+    if not shutil.which("claude"):
+        return None
+    try:
+        r = subprocess.run(
+            ["claude", "-p", prompt],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=_CLI_TIMEOUT_S, check=False,
+        )
+        return (r.stdout or "").strip() or None
+    except Exception as exc:
+        print(f"[user-sim] claude cli error: {exc}", flush=True)
         return None
 
-    text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
-    text = (text or "").strip()
-    return text or None
+
+# --------------------------------------------------------------------------- entry
+def decide_reply(engine, brief, scripted_turn, agent_reply, history,
+                 *, model: Optional[str] = None) -> Optional[str]:
+    """Generate the user's next chat message.
+
+    Args:
+      engine: handle from make_engine() (None → returns None).
+      brief: the conv brief (scene + user_turns).
+      scripted_turn: the dataset's intended text for this step (reference).
+      agent_reply: TALOS's latest reply text (what we're responding to).
+      history: list of (role, text) tuples, role in {"user","agent"}.
+      model: api-engine model override (ignored by CLI engines).
+
+    Returns the generated reply, or None on any failure (caller falls back
+    to scripted_turn)."""
+    if engine is None:
+        return None
+    kind = engine.get("kind") if isinstance(engine, dict) else "api"
+    user_block = _user_block(brief, scripted_turn, agent_reply, history)
+
+    if kind == "api":
+        client = engine["client"] if isinstance(engine, dict) else engine
+        model = model or os.environ.get("USER_SIM_MODEL") or DEFAULT_MODEL
+        return _call_api(client, user_block, model)
+
+    # CLI engines get system + per-turn block as one prompt.
+    prompt = f"{_SYSTEM}\n\n{user_block}"
+    if kind == "codex":
+        return _call_codex(prompt)
+    if kind == "claude":
+        return _call_claude_cli(prompt)
+    return None

@@ -428,11 +428,11 @@ def run_conv(brief, browser, args):
     def dispatch_intent(t):
         return t in PANEL_ACTION_TEXTS or any(w in t for w in ["下发", "开始", "就按", "提交"])
 
-    # User-sim state: when a Claude client is available, informational turns
-    # are generated to fit TALOS's actual reply instead of replayed verbatim.
-    sim_client = getattr(args, "_user_sim_client", None)
+    # User-sim state: when an engine is available, informational turns are
+    # generated to fit TALOS's actual reply instead of replayed verbatim.
+    sim_engine = getattr(args, "_user_sim_engine", None)
     sim_model = getattr(args, "user_sim_model", None)
-    sim_on = sim_client is not None
+    sim_on = sim_engine is not None
     from user_sim import decide_reply
     prev_chat = ""
     sim_history = []
@@ -480,7 +480,7 @@ def run_conv(brief, browser, args):
             agent_reply = _new_agent_text(prev_chat, _chat_col_text(page))
             if agent_reply:
                 sim_history.append(("agent", agent_reply))
-            gen = decide_reply(sim_client, brief, ut, agent_reply, sim_history,
+            gen = decide_reply(sim_engine, brief, ut, agent_reply, sim_history,
                                model=sim_model)
             if gen:
                 sent_text = gen
@@ -1401,9 +1401,13 @@ def main():
                     default=True,
                     help="Disable the LLM user-simulator; replay scripted "
                          "turns verbatim (the old behavior).")
+    ap.add_argument("--user-sim-engine", default=None,
+                    help="user-sim engine: codex | claude | api "
+                         "(default codex / $USER_SIM_ENGINE). codex/claude use "
+                         "the CLI's own auth — no Anthropic key needed.")
     ap.add_argument("--user-sim-model", default=None,
-                    help="Model for the user-simulator; overrides "
-                         "$USER_SIM_MODEL (default claude-opus-4-7).")
+                    help="api-engine model override; $USER_SIM_MODEL "
+                         "(default claude-opus-4-7). Ignored by CLI engines.")
     args = ap.parse_args()
 
     # Precedence: CLI flag > env var (already applied at import) > default.
@@ -1412,18 +1416,18 @@ def main():
     if args.phoenix_base:
         PHOENIX_BASE = args.phoenix_base.rstrip("/")
 
-    # Build the user-sim client once (None when --no-user-sim, or when no
-    # API key / the anthropic SDK is unavailable → runner falls back to
-    # scripted turns). Stash on args so run_conv can read it.
-    args._user_sim_client = None
+    # Build the user-sim engine once (None when --no-user-sim, or when the
+    # chosen engine is unavailable → runner falls back to scripted turns).
+    # Stash on args so run_conv can read it.
+    args._user_sim_engine = None
     if args.user_sim:
-        from user_sim import make_client, DEFAULT_MODEL
-        args._user_sim_client = make_client()
-        if args._user_sim_client is None:
-            log("user-sim requested but WWY_ANTHROPIC_API_KEY/ANTHROPIC_API_KEY "
-                "or the anthropic SDK is unavailable — falling back to scripted turns")
+        from user_sim import make_engine, resolve_engine
+        args._user_sim_engine = make_engine(args.user_sim_engine)
+        eng = resolve_engine(args.user_sim_engine)
+        if args._user_sim_engine is None:
+            log(f"user-sim engine={eng} unavailable — falling back to scripted turns")
         else:
-            log(f"user-sim ON (model={args.user_sim_model or os.environ.get('USER_SIM_MODEL') or DEFAULT_MODEL})")
+            log(f"user-sim ON (engine={args._user_sim_engine['kind']})")
     else:
         log("user-sim OFF (--no-user-sim) — replaying scripted turns verbatim")
 

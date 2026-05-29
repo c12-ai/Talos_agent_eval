@@ -75,14 +75,20 @@ CLI args:
 | `--out` | 无 | 不指定就**不写文件**；指定路径会同时写 JSON 诊断 |
 | `--talos-base` | `$TALOS_BASE` 或 fallback | TALOS API base URL；覆盖环境变量。relay IP 变了用这个传 |
 | `--phoenix-base` | `$PHOENIX_BASE` 或 fallback | Phoenix base URL；覆盖环境变量 |
-| `--no-user-sim` | 默认开（有 key 才生效） | 关掉 LLM 用户模拟器，逐字回放脚本 turn（旧行为） |
-| `--user-sim-model` | `$USER_SIM_MODEL` 或 `claude-opus-4-7` | 用户模拟器用的模型 |
+| `--no-user-sim` | 默认开 | 关掉 LLM 用户模拟器，逐字回放脚本 turn（旧行为） |
+| `--user-sim-engine` | `$USER_SIM_ENGINE` 或 `codex` | 模拟器引擎：`codex`（默认，走 OpenAI 额度，无需 Anthropic key）/ `claude` / `api` |
+| `--user-sim-model` | `$USER_SIM_MODEL` 或 `claude-opus-4-7` | 仅 `api` 引擎用的模型；CLI 引擎忽略 |
 
 ## 用户模拟器（user-sim）
 
 driver 默认**不逐字念稿**：信息类聊天 turn 会先读 TALOS 的真实回复，再用 Claude 生成贴合上下文的用户回复，brief 里那条 turn 只当「这步用户想表达啥 / 手上有哪些信息」的参考。解决的问题：以前 agent 问 A，脚本下一句是 B，driver 照样发 B（"agent 问天气，脚本写公交站，就发公交站"）。
 
-- **引擎**：`scripts/user_sim.py`，官方 anthropic SDK。key 从 `WWY_ANTHROPIC_API_KEY`（项目专用，优先）或 `ANTHROPIC_API_KEY` 读（`pip install anthropic`）。**没 key / SDK 不在 / 调用失败 → 自动回落到脚本原文**，确定性路径照常跑（启动日志会打 `user-sim ... falling back to scripted turns`）。
+- **引擎可切换**（`scripts/user_sim.py`，`--user-sim-engine` / `$USER_SIM_ENGINE`，默认 `codex`）：
+  - `codex`（默认）：`codex exec --output-last-message` 取干净输出。走 codex CLI 自己的登录额度（OpenAI 系），**不需要 Anthropic key、不吃 Anthropic 限流**。官方非交互模式，最省事。
+  - `claude`：`claude -p`（Claude Code print 模式），走 Claude 订阅。
+  - `api`：anthropic SDK 直连 Messages API。key 从 `WWY_ANTHROPIC_API_KEY`（项目专用，优先）或 `ANTHROPIC_API_KEY` 读（`pip install anthropic`）。`--user-sim-model` 只对这个引擎生效。
+  - **引擎不可用（CLI 不在 PATH / 无 key / 调用失败）→ 自动回落脚本原文**，确定性路径照常跑。
+  - 调质量先跑离线单测（不碰 relay，只要引擎）：`python3 scripts/user_sim_offline_test.py --engine codex`。
 - **只改聊天文案，不碰 stage 机**：面板动作（批准/确认/下发）和 stage 流转**仍然用脚本里的 `ut` 驱动**，不是用模拟器生成的文本。所以面板确定性逻辑一点没动。开场第一句（k==0）和 `dispatch_intent` 命中的 turn（含 `可以`/`下发`/`提交` 等）保持脚本原文。
 - **配置**：`export WWY_ANTHROPIC_API_KEY=...`（或 `ANTHROPIC_API_KEY`）；模型默认 `claude-opus-4-7`，要省钱用 `--user-sim-model claude-haiku-4-5` 或 `export USER_SIM_MODEL=claude-sonnet-4-6`。
 - **关掉**：`--no-user-sim` 回到逐字回放。

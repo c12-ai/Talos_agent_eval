@@ -6,10 +6,11 @@ replies to `decide_reply` and prints `scripted → generated` side by side, so
 you can judge the user-sim's reply quality and prompt tuning in isolation —
 before wiring it into a live run.
 
-Needs only the API key (project var preferred, then the SDK default):
-    export WWY_ANTHROPIC_API_KEY=...   # or ANTHROPIC_API_KEY=...
-    python3 scripts/user_sim_offline_test.py
-    python3 scripts/user_sim_offline_test.py --conv conv-008 --model claude-haiku-4-5
+Engine (default codex — no Anthropic key needed):
+    python3 scripts/user_sim_offline_test.py                      # codex CLI
+    python3 scripts/user_sim_offline_test.py --engine claude      # claude -p
+    export WWY_ANTHROPIC_API_KEY=...                              # api engine needs a key
+    python3 scripts/user_sim_offline_test.py --engine api --model claude-haiku-4-5
 
 Each scenario is a (scripted_turn, fake_agent_reply) pair. The scripted turn
 is what the dataset would have replayed verbatim; the fake agent reply is
@@ -26,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from user_sim import make_client, decide_reply, DEFAULT_MODEL  # noqa: E402
+from user_sim import make_engine, decide_reply, DEFAULT_MODEL, resolve_engine  # noqa: E402
 from smoke_runner_20260518 import build_briefs  # noqa: E402
 
 
@@ -72,28 +73,31 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--conv", default="conv-008",
                     help="brief id to source the user's facts from")
+    ap.add_argument("--engine", default=None,
+                    help="codex | claude | api (default codex / $USER_SIM_ENGINE)")
     ap.add_argument("--model", default=None,
-                    help="override model (default claude-opus-4-7 / $USER_SIM_MODEL)")
+                    help="api-engine model override (ignored by CLI engines)")
     args = ap.parse_args()
 
-    client = make_client()
-    if client is None:
-        print("ERROR: no Anthropic client — set WWY_ANTHROPIC_API_KEY (or "
-              "ANTHROPIC_API_KEY) and `pip install anthropic`. This offline "
-              "test needs a key.",
-              file=sys.stderr)
+    engine = make_engine(args.engine)
+    if engine is None:
+        eng = resolve_engine(args.engine)
+        print(f"ERROR: user-sim engine {eng!r} unavailable. "
+              "codex/claude need the CLI on PATH; api needs "
+              "WWY_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY) + `pip install "
+              "anthropic`.", file=sys.stderr)
         sys.exit(1)
 
     brief = build_briefs([args.conv])[0]
-    model = args.model or DEFAULT_MODEL
-    print(f"=== user-sim offline test ===  conv={args.conv}  model={model}\n")
+    print(f"=== user-sim offline test ===  conv={args.conv}  "
+          f"engine={engine['kind']}  model={args.model or DEFAULT_MODEL}\n")
 
     # Thread a running history so multi-turn context behaves like a real run.
     history = []
     for label, scripted, agent_reply in SCENARIOS:
         history.append(("agent", agent_reply))
-        gen = decide_reply(client, brief, scripted, agent_reply, history,
-                           model=model)
+        gen = decide_reply(engine, brief, scripted, agent_reply, history,
+                           model=args.model)
         history.append(("user", gen or scripted))
 
         print(f"### {label}")
