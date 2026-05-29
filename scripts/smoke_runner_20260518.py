@@ -314,7 +314,14 @@ def new_session(page, *, attempts: int = 3, click_timeout: int = 15000) -> str:
         clicked = False
         for t in ["新对话", "New Chat"]:
             try:
-                b = page.get_by_text(t, exact=True).first
+                # Structured locator: the real new-chat control is the only
+                # actual <button> carrying this text. The sidebar also lists
+                # ~16 never-renamed history rows titled '新对话', but those are
+                # <div role="button"> — so get_by_text(exact) / get_by_role(
+                # "button", name=...) both match all 17 and .first only lands on
+                # the new-chat button by DOM luck. button:has-text isolates the
+                # one real <button>. (DOM confirmed 2026-05-29.)
+                b = page.locator(f"button:has-text('{t}')").first
                 if b.count() and b.is_visible(timeout=click_timeout):
                     b.click()
                     # The click triggers a SPA route change; wait for DOM to

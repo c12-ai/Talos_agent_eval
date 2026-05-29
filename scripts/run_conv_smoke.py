@@ -142,8 +142,10 @@ def run_conv(conv_id: str, browser):
     page.goto("http://192.168.12.239:8080/", timeout=30000, wait_until="load")
     time.sleep(4)
 
-    # Click "新对话"
-    page.get_by_text("新对话", exact=True).first.click()
+    # Click "新对话" — target the real <button>, not the ~16 never-renamed
+    # history rows titled '新对话' (those are <div role="button">, so a text
+    # locator would match all of them). (DOM confirmed 2026-05-29.)
+    page.locator("button:has-text('新对话')").first.click()
     time.sleep(2)
 
     # Extract session_id

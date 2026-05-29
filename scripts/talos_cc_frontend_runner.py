@@ -198,7 +198,22 @@ def wait_for_text(page: Page, text: str, timeout: float = 60) -> None:
 
 def create_new_conversation(page: Page) -> str:
     log("creating new conversation")
-    click_first_visible_text(page, ["新对话", "New Chat"], timeout=30)
+    # The sidebar lists ~16 never-renamed history rows titled '新对话', but those
+    # are <div role="button"> — only the new-chat control is a real <button>.
+    # button:has-text isolates it; the generic click_first_visible_text tries
+    # get_by_role/get_by_text first, which match all 17. (DOM confirmed 2026-05-29.)
+    def _click_new_chat():
+        for label in ("新对话", "New Chat"):
+            btn = page.locator(f"button:has-text('{label}')").first
+            try:
+                if btn.count() and btn.is_visible(timeout=500):
+                    btn.click()
+                    return label
+            except Exception:
+                continue
+        return None
+
+    wait_until(_click_new_chat, timeout=30, description="new-chat button")
     sleep(2)
     session_id = page.evaluate(
         """() => {
