@@ -2,3 +2,9 @@
 .gstack/
 __pycache__/
 *.pyc
+
+# secrets — never commit API keys
+.env
+.env.*
+*.key
+.anthropic_key
