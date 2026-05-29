@@ -12,7 +12,8 @@ anticipate, the runner still fired the next scripted line ("agent asks about
 the weather, script says 'where's the bus stop', runner sends 'where's the
 bus stop'"). The script is a reference, not a teleprompter.
 
-Engine: Claude via the official Anthropic SDK. Requires ANTHROPIC_API_KEY.
+Engine: Claude via the official Anthropic SDK. Reads the API key from
+WWY_ANTHROPIC_API_KEY (project-scoped, preferred) or ANTHROPIC_API_KEY.
 If the key/SDK is unavailable or any call fails, `make_client` returns None
 and `decide_reply` returns None — callers fall back to the scripted turn, so
 the deterministic path still works with no key.
@@ -47,19 +48,38 @@ _SYSTEM = """你在扮演一名化学实验室研究员，正在和实验室助�
 - **只输出你要发给 TALOS 的那一句话**，不要加引号、不要解释、不要写「我会说：」之类。"""
 
 
+# API key env vars, in priority order. WWY_ANTHROPIC_API_KEY is the
+# project-scoped key — set it so this eval uses a dedicated key without
+# colliding with a generic ANTHROPIC_API_KEY that other tools on the box may
+# already use. Falls back to the SDK's default ANTHROPIC_API_KEY.
+_KEY_ENV_VARS = ("WWY_ANTHROPIC_API_KEY", "wwy_anthropic_api_key",
+                 "ANTHROPIC_API_KEY")
+
+
+def _resolve_api_key():
+    for name in _KEY_ENV_VARS:
+        v = os.environ.get(name)
+        if v:
+            return v
+    return None
+
+
 def make_client():
     """Return an Anthropic client, or None when the SDK or API key is absent.
 
     None is the signal to callers that user-sim is unavailable → fall back
-    to scripted turns."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    to scripted turns. Uses the project key WWY_ANTHROPIC_API_KEY first,
+    then ANTHROPIC_API_KEY; passes it explicitly so the SDK uses whichever
+    we resolved."""
+    key = _resolve_api_key()
+    if not key:
         return None
     try:
         import anthropic
     except Exception:
         return None
     try:
-        return anthropic.Anthropic()
+        return anthropic.Anthropic(api_key=key)
     except Exception:
         return None
 

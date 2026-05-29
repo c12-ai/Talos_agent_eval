@@ -6,8 +6,8 @@ replies to `decide_reply` and prints `scripted → generated` side by side, so
 you can judge the user-sim's reply quality and prompt tuning in isolation —
 before wiring it into a live run.
 
-Needs only ANTHROPIC_API_KEY:
-    export ANTHROPIC_API_KEY=...
+Needs only the API key (project var preferred, then the SDK default):
+    export WWY_ANTHROPIC_API_KEY=...   # or ANTHROPIC_API_KEY=...
     python3 scripts/user_sim_offline_test.py
     python3 scripts/user_sim_offline_test.py --conv conv-008 --model claude-haiku-4-5
 
@@ -78,8 +78,9 @@ def main():
 
     client = make_client()
     if client is None:
-        print("ERROR: no Anthropic client — set ANTHROPIC_API_KEY (and "
-              "`pip install anthropic`). This offline test needs a key.",
+        print("ERROR: no Anthropic client — set WWY_ANTHROPIC_API_KEY (or "
+              "ANTHROPIC_API_KEY) and `pip install anthropic`. This offline "
+              "test needs a key.",
               file=sys.stderr)
         sys.exit(1)
 

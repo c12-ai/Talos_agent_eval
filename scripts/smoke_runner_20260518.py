@@ -1412,16 +1412,16 @@ def main():
     if args.phoenix_base:
         PHOENIX_BASE = args.phoenix_base.rstrip("/")
 
-    # Build the user-sim client once (None when --no-user-sim, or when
-    # ANTHROPIC_API_KEY / the anthropic SDK is unavailable → runner falls
-    # back to scripted turns). Stash on args so run_conv can read it.
+    # Build the user-sim client once (None when --no-user-sim, or when no
+    # API key / the anthropic SDK is unavailable → runner falls back to
+    # scripted turns). Stash on args so run_conv can read it.
     args._user_sim_client = None
     if args.user_sim:
         from user_sim import make_client, DEFAULT_MODEL
         args._user_sim_client = make_client()
         if args._user_sim_client is None:
-            log("user-sim requested but ANTHROPIC_API_KEY / anthropic SDK "
-                "unavailable — falling back to scripted turns")
+            log("user-sim requested but WWY_ANTHROPIC_API_KEY/ANTHROPIC_API_KEY "
+                "or the anthropic SDK is unavailable — falling back to scripted turns")
         else:
             log(f"user-sim ON (model={args.user_sim_model or os.environ.get('USER_SIM_MODEL') or DEFAULT_MODEL})")
     else:
