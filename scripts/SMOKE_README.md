@@ -18,6 +18,20 @@ playwright install chromium
 
 Python ≥ 3.10。
 
+**用户模拟器引擎（user-sim）**——默认引擎是 `codex`，所以跑通完整流程**需要先装好并登录 codex CLI**：
+
+```bash
+codex --version      # 确认已安装（本仓库验证用的是 codex-cli 0.130）
+codex login          # 首次需登录授权（走 codex 自己的 OpenAI 额度，不需要 Anthropic key）
+```
+
+- codex 引擎不消耗 Anthropic 额度，也不吃 Anthropic 限流——这是默认选它的原因。
+- 不想用 codex：`--user-sim-engine claude`（需装好 `claude` CLI 并登录）或 `--user-sim-engine api`（需 `pip install anthropic` + 设 `WWY_ANTHROPIC_API_KEY`）。
+- 完全不想要模拟器：`--no-user-sim`，逐字回放脚本，**不依赖任何 CLI / key**。
+- 引擎缺失（codex 不在 PATH / 未登录）时脚本不会崩，会打日志回落到脚本原文——但那样就不是"灵活回复"了，所以要跑通本意，先把 codex 装好。
+
+详见下方「用户模拟器（user-sim）」段。
+
 ## 网络前置
 
 脚本访问两个服务：TALOS API（默认 `:8080`）、Phoenix（默认 `:6006`）。这两个 base URL **不再写死在脚本里**——relay IP 每次 Tailscale 重登就换，写死会过期。
@@ -151,7 +165,7 @@ Relay 偶尔会瞬时 read timeout（~每小时 1-2 次）。如果脚本运行�
 ```
 scripts/
   smoke_runner_20260518.py        ← 主入口
-  user_sim.py                     ← LLM 用户模拟器（Claude；被主入口 import，无 key 自动回落）
+  user_sim.py                     ← LLM 用户模拟器（默认 codex CLI 引擎；被主入口 import，引擎缺失自动回落脚本）
   talos_panel_ui.py               ← 面板 UI helpers（被主入口 import）
   talos_re_frontend_runner.py     ← state-driven RE 驱动（被 panel_ui 委托）
   talos_cc_frontend_runner.py     ← CC 驱动 + 通用 helpers
