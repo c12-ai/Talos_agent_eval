@@ -8,6 +8,13 @@ import time
 from pathlib import Path
 from typing import Iterable
 
+# Slot install / cartridge selection both depend on the backend persisting the
+# cartridge a few seconds after the click (~6-8s observed on a slow relay,
+# conv-009 2026-05-29). Poll for that long rather than checking once after a
+# fixed sleep — the old single-check raced and judged false failures.
+_SLOT_INSTALL_TIMEOUT_S = 30
+_SLOT_SELECT_TIMEOUT_S = 20
+
 
 # ---------------------------------------------------------------------------
 # Generic helpers (from talos_cc_frontend_runner.py)
@@ -171,17 +178,49 @@ def _ensure_slot_installed(page, slot_label: str = "备料架L4层样品柱002�
     try:
         slot.scroll_into_view_if_needed(timeout=3000)
         slot.click(timeout=8000)
-        time.sleep(1.2)
     except Exception as e:
         print(f"[UI] slot install click failed: {e}")
         return False
-    ok = _slot_installed(slot)
-    print(f"[UI] slot '{slot_label}' install {'confirmed' if ok else 'NOT confirmed'}")
+    # The backend persists the cartridge a few seconds AFTER the click — on a
+    # slow relay this was ~6-8s (conv-009, 2026-05-29). The slot button only
+    # flips to emerald once that lands. The old code did ONE _slot_installed
+    # check after a fixed sleep(1.2); on a slow backend it judged a false
+    # "NOT confirmed", so the cartridge was never selected, CC was dispatched
+    # with an un-installed slot, CC never ran, and RE stayed not_started.
+    # Poll until emerald instead, with a generous budget.
+    deadline = time.time() + _SLOT_INSTALL_TIMEOUT_S
+    ok = False
+    while time.time() < deadline:
+        if _slot_installed(slot):
+            ok = True
+            break
+        time.sleep(1.0)
+    print(f"[UI] slot '{slot_label}' install "
+          f"{'confirmed' if ok else f'NOT confirmed after {_SLOT_INSTALL_TIMEOUT_S}s'}")
     return ok
 
 
 def _select_cartridge(page, slot_id: str = "bic_09B_l4_002") -> bool:
-    """Select cartridge from dropdown. 3-layer fallback as in working script."""
+    """Select cartridge from dropdown, polling until it's selectable.
+
+    The dropdown only lists the cartridge once the backend has persisted the
+    install (the same ~6-8s lag as _ensure_slot_installed). A single attempt
+    can fire before the option exists and fall through to "Could not select"
+    even though the install succeeded. Retry on a budget."""
+    deadline = time.time() + _SLOT_SELECT_TIMEOUT_S
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        if _select_cartridge_once(page, slot_id):
+            return True
+        time.sleep(1.0)
+    print(f"[UI] Could not select cartridge for {slot_id} "
+          f"after {attempt} attempts / {_SLOT_SELECT_TIMEOUT_S}s")
+    return False
+
+
+def _select_cartridge_once(page, slot_id: str = "bic_09B_l4_002") -> bool:
+    """One pass of the 3-layer cartridge-selection fallback."""
     # Layer 1: native select
     selects = page.locator("select")
     try:
@@ -230,7 +269,6 @@ def _select_cartridge(page, slot_id: str = "bic_09B_l4_002") -> bool:
     except Exception:
         pass
 
-    print(f"[UI] Could not select cartridge for {slot_id}")
     return False
 
 
