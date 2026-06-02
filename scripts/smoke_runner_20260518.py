@@ -462,15 +462,25 @@ def run_conv(brief, browser, args):
                 and not _task_terminal(session_id, "cc")):
             log(f"  [handoff] turn {k+1} non-progress-query in cc_wait -> "
                 f"block-waiting CC terminal before send")
-            _wait_lab_terminal(session_id, want="cc")
-            final_ct = _read_cc_column_type(session_id)
-            if final_ct == "silica_12g":
-                cc_spec_violation = None
-            elif final_ct:
-                cc_spec_violation = final_ct
-            log(f"  [GUARD] §4.3 column_type at CC terminal: {final_ct}")
-            stage = "re_spec"
-            log(f"  [handoff] stage advanced to re_spec")
+            cc_status = _wait_lab_terminal(session_id, want="cc")
+            if cc_status is None:
+                # Wait window expired but CC is still running. Do NOT advance to
+                # re_spec — sending an RE "过柱完成" nudge while CC is still
+                # in_progress is a lie the agent will (correctly) reject per
+                # talos_operation_guide.md §163, and RE phase stays not_started
+                # forever. Leave stage at cc_wait so subsequent turns keep
+                # querying progress instead of forcing handoff.
+                log(f"  [handoff] CC wait window expired; staying in cc_wait, "
+                    f"no handoff this turn")
+            else:
+                final_ct = _read_cc_column_type(session_id)
+                if final_ct == "silica_12g":
+                    cc_spec_violation = None
+                elif final_ct:
+                    cc_spec_violation = final_ct
+                log(f"  [GUARD] §4.3 column_type at CC terminal: {final_ct}")
+                stage = "re_spec"
+                log(f"  [handoff] stage advanced to re_spec")
 
         rec = {**turn, "panel_action": None, "stage_before": stage}
 
@@ -648,14 +658,23 @@ def run_conv(brief, browser, args):
 
     # Loop ended: finalize any still-running submitted lab task(s).
     if stage == "cc_wait":
-        _wait_lab_terminal(session_id, want="cc")
-        final_ct = _read_cc_column_type(session_id)
-        if final_ct == "silica_12g":
-            cc_spec_violation = None
-        elif final_ct:
-            cc_spec_violation = final_ct
-        log(f"  [GUARD] §4.3 column_type at CC terminal (post-loop): {final_ct}")
-        stage = "re_spec_unreached" if is_re else "done"
+        cc_status = _wait_lab_terminal(session_id, want="cc")
+        if cc_status is None:
+            # CC physically still running when our wait window expired. Bail
+            # to cc_wait_timeout — this naturally skips the re_should_finalize
+            # branch below (stage not in re_spec/re_submit/re_spec_unreached),
+            # so we don't send a false "过柱完成, 开始旋蒸" nudge that the agent
+            # would reject and that would falsely mark the conv re_spec_failed.
+            log("  [lab] CC wait window expired post-loop — final_stage=cc_wait_timeout")
+            stage = "cc_wait_timeout"
+        else:
+            final_ct = _read_cc_column_type(session_id)
+            if final_ct == "silica_12g":
+                cc_spec_violation = None
+            elif final_ct:
+                cc_spec_violation = final_ct
+            log(f"  [GUARD] §4.3 column_type at CC terminal (post-loop): {final_ct}")
+            stage = "re_spec_unreached" if is_re else "done"
 
     # Post-loop RE finalize: brief turns alone may not push live agent through
     # the panel-driven RE flow. If we still need RE, send an articulated
@@ -683,8 +702,8 @@ def run_conv(brief, browser, args):
             stage = re_finalize_log.get("final_stage", "re_spec_failed")
 
     if stage == "re_wait":
-        _wait_lab_terminal(session_id, want="re")
-        stage = "done"
+        re_status = _wait_lab_terminal(session_id, want="re")
+        stage = "done" if re_status is not None else "re_wait_timeout"
 
     time.sleep(3)
     state = api_workflow_state(session_id)
@@ -737,6 +756,14 @@ def _task_terminal(session_id, want=None):
 
 
 def _wait_lab_terminal(session_id, want=None, timeout=1200):
+    """Poll until the task reaches a real backend-terminal status. Returns the
+    status string on success, or None when our own wait window expires.
+
+    The None sentinel is intentional: backend may legitimately report
+    'timeout' as a terminal status, so we cannot reuse the same string to
+    mean 'runner gave up waiting' without collision. Callers MUST check for
+    None before advancing stage downstream — otherwise CC-still-running gets
+    treated as CC-done and the next phase nudges become lies."""
     log(f"  [lab] waiting for {want or 'task'} terminal (poll 15s)...")
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -746,7 +773,7 @@ def _wait_lab_terminal(session_id, want=None, timeout=1200):
             log(f"  [lab] {want or 'task'} terminal status={s}")
             return s
     log("  [lab] WAIT TIMEOUT")
-    return "timeout"
+    return None
 
 
 # ---------------------------------------------------------------------------
